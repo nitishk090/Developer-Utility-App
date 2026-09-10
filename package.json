@@ -37,6 +37,7 @@
       ]
     },
     "nsis": {
+      "artifactName": "Developer-Utility-Setup.exe",
       "installerIcon": "build/icons/icon.ico",
       "uninstallerIcon": "build/icons/icon.ico",
       "installerHeaderIcon": "build/icons/icon.ico"

@@ -1,0 +1,47 @@
+name: Release Windows Installer
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release Windows Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer and Electron process
+        run: npm run build
+
+      - name: Package Windows installer
+        run: npm run dist
+
+      - name: Verify installer exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "release/Developer-Utility-Setup.exe")) {
+            throw "Expected installer was not created: release/Developer-Utility-Setup.exe"
+          }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release/Developer-Utility-Setup.exe
