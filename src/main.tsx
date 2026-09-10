@@ -33,6 +33,7 @@ const navigation: Tool[] = [
   { id: "curl", label: "cURL Workspace", group: "API & Network" },
   { id: "curl-code", label: "cURL → Code", group: "API & Network" },
   { id: "api", label: "API Tester", group: "API & Network" },
+  { id: "aws-logs", label: "AWS Logs", group: "API & Network" },
   { id: "request-analyzer", label: "Request Analyzer", group: "API & Network" },
   { id: "headers", label: "Headers Analyzer", group: "API & Network" },
   { id: "status", label: "HTTP Status Codes", group: "API & Network" },
@@ -140,6 +141,7 @@ function Page({
   if (id === "postgres") return <PostgresHelper key={id} notify={notify} />;
   if (id === "curl-code") return <CurlCode key={id} notify={notify} />;
   if (id === "api") return <ApiTester key={id} notify={notify} />;
+  if (id === "aws-logs") return <AwsLogs key={id} notify={notify} />;
   if (id === "request-analyzer")
     return <RequestAnalyzer key={id} notify={notify} />;
   if (id === "mobile-android")
@@ -1551,6 +1553,217 @@ function ApiTester({ notify }: { notify: (message: string) => void }) {
     </div>
   );
 }
+type AwsLogEntry = {
+  id: string;
+  timestamp: string;
+  source: string;
+  message: string;
+  detail: unknown;
+};
+
+type AwsLogPage = { entries: AwsLogEntry[]; nextToken: string | null };
+
+type AwsEnvironment = "BETA" | "STAGING" | "PRODUCTION" | "UAT";
+
+const AWS_ENVIRONMENT_HOSTS: Record<AwsEnvironment, string> = {
+  BETA: "planaventure-beta.granitestack.io",
+  STAGING: "planaventure-staging.granitestack.io",
+  PRODUCTION: "planaventure.granitestack.io",
+  UAT: "planaventure-uat.granitestack.io",
+};
+
+function collectAwsLogs(payload: unknown): AwsLogPage {
+  let nextToken: string | null = null;
+  const findList = (value: unknown): unknown[] => {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== "object") return [];
+    const record = value as Record<string, unknown>;
+    if (typeof record.next_token === "string") nextToken = record.next_token;
+    if (typeof record.nextToken === "string") nextToken = record.nextToken;
+    for (const key of ["events", "logs", "results", "data", "items"]) {
+      if (Array.isArray(record[key])) return record[key];
+    }
+    for (const nested of Object.values(record)) {
+      const found = findList(nested);
+      if (found.length) return found;
+    }
+    return [];
+  };
+  const entries = findList(payload).map((item, index) => {
+    if (typeof item === "string") {
+      return {
+        id: String(index),
+        timestamp: "",
+        source: "webapi_handler",
+        message: item,
+        detail: item,
+      };
+    }
+    const record = item && typeof item === "object"
+      ? item as Record<string, unknown>
+      : {};
+    const message = record.message ?? record.msg ?? record.log ?? record.text ?? item;
+    const timestamp = record.timestamp ?? record.time ?? record.created_at ?? record.datetime ?? "";
+    return {
+      id: String(record.id ?? record.eventId ?? index),
+      timestamp: String(timestamp),
+      source: String(record.source ?? record.log_group ?? record.logger ?? "webapi_handler"),
+      message: typeof message === "string" ? message : JSON.stringify(message),
+      detail: item,
+    };
+  });
+  return { entries, nextToken };
+}
+
+function requestFromLogMessage(message: string): { method: string; url: string; body?: string } | null {
+  const match = message.match(/['"]method['"]\s*:\s*['"]([A-Z]+)['"][\s\S]*?['"]url['"]\s*:\s*['"](https?:\/\/[^'"]+)/i);
+  if (!match) return null;
+  const bodyMatch = message.match(/['"]data['"]\s*:\s*['"]((?:\\.|[^'"\\])*)['"]/i);
+  return {
+    method: match[1].toUpperCase(),
+    url: match[2].replaceAll("\\'", "'").replaceAll("\\\"", '"'),
+    body: bodyMatch?.[1],
+  };
+}
+
+function logRequest(entry: AwsLogEntry): { method: string; url: string; body?: string } | null {
+  if (entry.detail && typeof entry.detail === "object") {
+    const record = entry.detail as Record<string, unknown>;
+    if (typeof record.url === "string") {
+      return {
+        method: String(record.method ?? "GET").toUpperCase(),
+        url: record.url,
+        body: typeof record.body === "string" ? record.body : undefined,
+      };
+    }
+  }
+  return requestFromLogMessage(entry.message);
+}
+
+function AwsLogs({ notify }: { notify: (message: string) => void }) {
+  const [poolId, setPoolId] = usePersistentState("aws-logs:pool", "gpool427713");
+  const [projectPk] = usePersistentState("aws-logs:project", "1839");
+  const [environment, setEnvironment] = usePersistentState<AwsEnvironment>("aws-logs:environment", "BETA");
+  const [group, setGroup] = usePersistentState("aws-logs:group", "webapi_handler");
+  const [token, setToken] = usePersistentState("aws-logs:token", "");
+  const [period, setPeriod] = usePersistentState("aws-logs:period", "1h");
+  const [pageSize, setPageSize] = usePersistentState("aws-logs:page-size", "100");
+  const [filter, setFilter] = useState("");
+  const [logs, setLogs] = useState<AwsLogEntry[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("Ready to fetch logs");
+  const [rawResponse, setRawResponse] = useState("");
+  const [nextToken, setNextToken] = useState<string | null>(null);
+  const [sources, setSources] = useState<string[]>(["source", "webapi_handler", "konect"]);
+
+  const target = AWS_ENVIRONMENT_HOSTS[environment];
+  const endpoint = (pageToken?: string | null) => {
+    const query = new URLSearchParams({
+      pool_id: poolId,
+      project_pk: projectPk,
+      metric: "LogStream",
+      log_group: group,
+      page_size: pageSize,
+      timePeriod: period,
+    });
+    if (pageToken) query.set("next_token", pageToken);
+    return `https://${target}/metrics/?${query.toString()}`;
+  };
+  const fetchLogs = async (pageToken?: string | null) => {
+    setLoading(true);
+    setStatus("Fetching log stream...");
+    try {
+      const result = await window.developerUtility.http?.request({
+        method: "GET",
+        url: endpoint(pageToken),
+        headers: token.trim() ? { Authorization: token.trim() } : {},
+      });
+      if (!result) throw new Error("HTTP bridge unavailable");
+      if (!result.ok) throw new Error(result.error ?? `HTTP ${result.status}`);
+      setRawResponse(result.body);
+      const parsed = JSON.parse(result.body) as unknown;
+      const page = collectAwsLogs(parsed);
+      const nextLogs = pageToken ? [...logs, ...page.entries] : page.entries;
+      setLogs(nextLogs);
+      setSources((previous) => Array.from(new Set([
+        ...previous,
+        ...nextLogs.map((entry) => entry.source).filter(Boolean),
+      ])));
+      setNextToken(page.nextToken);
+      setSelected(null);
+      setStatus(
+        page.entries.length
+          ? `${nextLogs.length} events loaded${page.nextToken ? " - more available" : ""}`
+          : "API returned 0 events for this time range",
+      );
+      notify(`Loaded ${page.entries.length} log events`);
+    } catch (error) {
+      setLogs([]);
+      setRawResponse(`Error: ${(error as Error).message}`);
+      setStatus("Unable to load logs");
+      notify("AWS Logs request failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+  const visibleLogs = logs.filter((entry) =>
+    `${entry.timestamp} ${entry.source} ${entry.message}`.toLowerCase().includes(filter.toLowerCase()),
+  );
+  const copy = async () => {
+    const ok = await window.developerUtility.clipboard.copy(rawResponse);
+    notify(ok ? "Raw response copied" : "Clipboard unavailable");
+  };
+  const copyRecord = async (entry: AwsLogEntry, format: "raw" | "json" | "curl") => {
+    const value = format === "raw"
+      ? entry.message
+      : format === "json"
+        ? JSON.stringify(entry.detail, null, 2)
+        : (() => {
+            const request = logRequest(entry);
+            if (!request) return "";
+            const body = request.body ? ` --data-raw ${JSON.stringify(request.body)}` : "";
+            return `curl --url ${JSON.stringify(request.url)} --request ${request.method}${body}`;
+          })();
+    const ok = await window.developerUtility.clipboard.copy(value);
+    notify(ok ? `Copied ${format} record` : "Clipboard unavailable");
+  };
+  const hasCurl = (entry: AwsLogEntry) => {
+    return logRequest(entry) !== null;
+  };
+  return (
+    <div className="awslogs">
+      <div className="awslogs-head">
+        <div className="awslogs-title"><span className="live-dot" /> <strong>LogStream Debugger</strong></div>
+        <div className="awslogs-filter"><span>⌕</span><input aria-label="Filter logs" placeholder="Filter logs..." value={filter} onChange={(event) => setFilter(event.target.value)} /><span className="count">{visibleLogs.length} / {logs.length || pageSize}</span></div>
+      </div>
+      <div className="awslogs-controls">
+        <label>Target environment<div className="aws-segmented" role="group" aria-label="Target environment">{(Object.keys(AWS_ENVIRONMENT_HOSTS) as AwsEnvironment[]).map((item) => <button key={item} className={environment === item ? "selected" : ""} onClick={() => { setEnvironment(item); setLogs([]); setNextToken(null); }}>{item}</button>)}</div></label>
+        <label>Lambda target<select value={group} aria-label="Lambda target" onChange={(event) => setGroup(event.target.value)}>{sources.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>
+        <label className="awslogs-wide">Time range<div className="range-options">{["5m", "10m", "15m", "30m", "1h", "12h", "1d"].map((item) => <button key={item} className={period === item ? "selected" : ""} onClick={() => setPeriod(item)}>{item}</button>)}</div></label>
+        <button className="awslogs-fetch" disabled={loading} onClick={() => void fetchLogs()}>{loading ? "Fetching..." : "Fetch logs"}</button>
+      </div>
+      <div className="awslogs-advanced">
+        <label>GPool ID<input value={poolId} onChange={(event) => { setPoolId(event.target.value); setLogs([]); setNextToken(null); }} placeholder="gpool..." /></label>
+        <span className="awslogs-target-summary">{environment} / {group}</span>
+        <label>Page size<select value={pageSize} onChange={(event) => setPageSize(event.target.value)}><option>25</option><option>50</option><option>100</option></select></label>
+        <label className="token-field">Authorization<input type="password" placeholder="Bearer token (optional)" value={token} onChange={(event) => setToken(event.target.value)} /></label>
+      </div>
+      <div className="awslogs-meta"><span>{status}</span><button onClick={() => void copy()} disabled={!rawResponse}>Copy raw response</button></div>
+      <div className="awslogs-list">
+        {visibleLogs.length ? visibleLogs.map((entry) => {
+          const open = selected === entry.id;
+          return <div className={open ? "awslog open" : "awslog"} key={`${entry.id}-${entry.timestamp}`} onClick={() => setSelected(open ? null : entry.id)}>
+            <time>{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : "--"}</time><span className="awslog-source">{entry.source}</span><code>{entry.message}</code><span className="chevron">{open ? "⌃" : "⌄"}</span>
+            {open ? <><pre>{typeof entry.detail === "string" ? entry.detail : JSON.stringify(entry.detail, null, 2)}</pre><div className="awslog-actions"><button onClick={(event) => { event.stopPropagation(); void copyRecord(entry, "raw"); }}>Copy raw</button><button onClick={(event) => { event.stopPropagation(); void copyRecord(entry, "json"); }}>Copy JSON</button>{hasCurl(entry) ? <button onClick={(event) => { event.stopPropagation(); void copyRecord(entry, "curl"); }}>Copy cURL</button> : null}</div></> : null}
+          </div>;
+        }) : <div className="awslogs-empty"><span className="empty-icon">AWS</span><strong>{logs.length ? "No matching events" : "No log events loaded"}</strong><span>{logs.length ? "Try a different filter." : "Choose a time range and fetch the LogStream."}</span></div>}
+      </div>
+      {nextToken ? <div className="awslogs-next"><button onClick={() => void fetchLogs(nextToken)} disabled={loading}>{loading ? "Loading..." : "Next page"} <span>→</span></button></div> : null}
+    </div>
+  );
+}
+
 function RequestAnalyzer({ notify }: { notify: (message: string) => void }) {
   const [input, setInput] = usePersistentState("request-analyzer:input", "");
   const [output, setOutput] = usePersistentState("request-analyzer:output", "");
