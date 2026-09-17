@@ -167,6 +167,82 @@ h1 {
   margin: 0;
   flex: 1;
 }
+.tool-search {
+  position: relative;
+  display: flex;
+  width: min(280px, 28vw);
+  min-width: 170px;
+  align-items: center;
+  border: 1px solid #d6dee8;
+  border-radius: 6px;
+  background: #f7f9fc;
+  color: #6f7882;
+}
+.dark .tool-search {
+  border-color: #252b32;
+  background: #0e1217;
+  color: #8b949e;
+}
+.tool-search:focus-within {
+  border-color: #1683d8;
+  box-shadow: 0 0 0 2px rgb(22 131 216 / 0.12);
+}
+.tool-search-icon {
+  padding-left: 9px;
+  font-size: 17px;
+  line-height: 1;
+}
+.tool-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 7px 9px 7px 6px;
+  background: transparent;
+  color: inherit;
+  font: 12px "Cascadia Mono", Consolas, monospace;
+}
+.tool-search-results {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  max-height: 330px;
+  overflow: auto;
+  border: 1px solid #d6dee8;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 12px 24px rgb(15 23 42 / 0.16);
+}
+.dark .tool-search-results {
+  border-color: #303943;
+  background: #15191e;
+  box-shadow: 0 12px 24px rgb(0 0 0 / 0.35);
+}
+.tool-search-result {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-bottom: 1px solid #edf0f4;
+  padding: 9px 10px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.dark .tool-search-result { border-bottom-color: #252b32; }
+.tool-search-result:last-child { border-bottom: 0; }
+.tool-search-result:hover,
+.tool-search-result.highlighted { background: #eaf4fd; }
+.dark .tool-search-result:hover,
+.dark .tool-search-result.highlighted { background: #132b43; }
+.tool-search-result span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-search-result small { flex: none; color: #7e8994; font: 10px "Segoe UI", sans-serif; }
+.tool-search-empty { padding: 12px 10px; color: #7e8994; font-size: 12px; }
 .content {
   min-height: 0;
   background: #fff;
@@ -476,6 +552,10 @@ button:disabled {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .tool-search {
+    width: min(220px, 32vw);
+    min-width: 130px;
   }
 }
 .editorgrid.three {
@@ -1264,33 +1344,82 @@ button:disabled {
 .awslogs-advanced { align-items: end; flex-wrap: wrap; padding-top: 10px; padding-bottom: 10px; background: #111315; }
 .awslogs-advanced input,
 .awslogs-advanced select { min-width: 130px; padding: 6px 8px; font-size: 11px; }
+.awslogs-advanced .awslogs-base-url { flex: 1.4; min-width: 280px; }
+.awslogs-advanced .awslogs-base-url input { width: 100%; }
 .awslogs-advanced .token-field { flex: 1; min-width: 220px; }
 .awslogs-advanced .token-field input { width: 100%; }
 .awslogs-target-summary { align-self: center; color: #8d98a3; font: 11px "Cascadia Mono", monospace; }
 .awslogs-meta { justify-content: space-between; color: #6e7883; font: 11px "Segoe UI", sans-serif; }
 .awslogs-meta button,
 .awslog-actions button { border: 1px solid #2b3035; border-radius: 5px; padding: 5px 8px; background: transparent; color: #aeb8c2; cursor: pointer; font-size: 11px; }
-.awslogs-actions { display: flex; gap: 6px; align-items: center; }
-.awslog-actions { grid-column: 1 / -1; display: flex; gap: 6px; margin: 0 0 8px 260px; }
+.awslog-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.awslog-actions button { background: #111315; }
 .awslogs-next { display: flex; justify-content: center; padding: 14px; }
 .awslogs-next button { border: 1px solid #1683d8; border-radius: 6px; padding: 8px 18px; background: #1683d8; color: #fff; cursor: pointer; font-weight: 700; }
 .awslogs-list { margin: 10px 0 0; border-top: 1px solid #25292d; }
-.awslog { display: grid; grid-template-columns: 148px 102px minmax(0, 1fr) 18px; gap: 10px; align-items: center; min-height: 42px; padding: 0 16px; border-bottom: 1px solid #24282c; cursor: pointer; }
+.awslog { display: grid; grid-template-columns: minmax(220px, 290px) minmax(0, 1fr) 22px; gap: 0 10px; min-width: 0; padding: 11px 16px; border-bottom: 1px solid #24282c; cursor: pointer; }
 .awslog:hover, .awslog.open { background: #171b20; }
+.awslog-meta-row { display: flex; min-width: 0; align-items: center; gap: 10px; grid-column: 1; grid-row: 1; }
 .awslog time { color: #66727e; font-size: 11px; }
 .awslog-source { overflow: hidden; padding: 3px 8px; border: 1px solid #353b41; border-radius: 4px; color: #d2d8de; font-size: 10px; font-weight: 700; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
-.awslog code { overflow: hidden; color: #e5e9ed; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.chevron { color: #6d7780; font-size: 15px; }
-.awslog pre { grid-column: 1 / -1; max-height: 220px; margin: 0 0 12px 260px; overflow: auto; color: #aeb8c2; font: 11px/1.5 "Cascadia Mono", monospace; white-space: pre-wrap; }
+.awslog-method { padding: 3px 5px; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; text-align: center; }
+.awslog-method-get { background: #1683d8; }
+.awslog-method-post { background: #b56b16; }
+.awslog-method-put, .awslog-method-patch { background: #7b55b5; }
+.awslog-method-delete { background: #b83c4a; }
+.awslog-message { display: block; min-width: 0; grid-column: 2; grid-row: 1; align-self: center; color: #e5e9ed; font-size: 12px; line-height: 1.5; overflow-x: auto; overflow-y: hidden; white-space: nowrap; text-overflow: clip; scrollbar-width: thin; }
+.awslog-expanded { display: grid; gap: 10px; min-width: 0; grid-column: 1 / -1; grid-row: 2; margin-top: 12px; padding: 0 0 2px; }
+.awslog-expanded-head { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; color: #8d98a3; font: 11px "Segoe UI", sans-serif; }
+.awslog-expanded-head span { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.awslog-expanded-head strong { color: #1683d8; font-family: "Cascadia Mono", monospace; font-weight: 600; }
+.awslog-detail { min-width: 0; margin: 0; padding: 16px 18px; overflow: visible; border: 1px solid #252b31; border-radius: 5px; background: #0b0d0f; color: #f4f6f8; font: 11px/1.5 "Cascadia Mono", monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
+.awslog-chevron { grid-column: 3; grid-row: 1; align-self: center; color: #6d7780; font-size: 15px; text-align: center; }
 .awslogs-empty { display: flex; min-height: 260px; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: #77818c; font: 12px "Segoe UI", sans-serif; }
 .awslogs-empty strong { color: #dce2e7; font-size: 14px; }
 .empty-icon { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid #30373e; border-radius: 9px; color: #f2b84b; font: 700 10px "Cascadia Mono", monospace; }
 @media (max-width: 760px) {
   .awslogs-head { align-items: stretch; flex-direction: column; }
   .awslogs-filter { min-width: 0; }
-  .awslog { grid-template-columns: 1fr 18px; gap: 6px; padding: 9px 12px; }
-  .awslog time, .awslog-source, .awslog code { grid-column: 1; }
-  .awslog .chevron { grid-column: 2; grid-row: 1 / 4; }
-  .awslog pre { grid-column: 1 / -1; margin-left: 0; }
-  .awslog-actions { margin-left: 0; }
+  .awslog { grid-template-columns: minmax(0, 1fr) 22px; gap: 7px 8px; padding: 10px 12px 12px; }
+  .awslog-meta-row { grid-column: 1; grid-row: 1; align-items: flex-start; flex-wrap: wrap; gap: 6px 8px; }
+  .awslog time { flex-basis: 100%; }
+  .awslog-message { grid-column: 1; grid-row: 2; white-space: normal; }
+  .awslog-expanded { grid-column: 1 / -1; grid-row: 3; margin-top: 4px; }
+  .awslog-chevron { grid-column: 2; grid-row: 1 / span 2; }
+  .awslog-expanded-head { align-items: flex-start; flex-direction: column; }
+  .awslog-expanded-head button { align-self: flex-end; }
+  .awslog-detail { padding: 8px 10px; }
+}
+.curl-workspace > .field:first-of-type textarea {
+  min-height: 150px;
+}
+.curl-detected {
+  margin: 12px 0 8px;
+  color: #6f7882;
+  font: 11px "Cascadia Mono", monospace;
+}
+.curl-detected strong {
+  color: #1683d8;
+}
+.curl-error {
+  margin: 10px 0;
+  padding: 9px 10px;
+  border: 1px solid #d14b4b66;
+  border-radius: 6px;
+  background: #d14b4b12;
+  color: #d14b4b;
+  font-size: 12px;
+}
+.curl-request-grid textarea,
+.curl-request-grid input,
+.curl-request-grid select {
+  min-height: 84px;
+}
+.curl-request-grid select,
+.curl-request-grid input {
+  min-height: 34px;
+}
+.curl-output {
+  min-height: 150px;
+  font-family: "Cascadia Mono", Consolas, monospace;
 }

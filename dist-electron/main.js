@@ -45,6 +45,7 @@ let status = { state: "stopped" };
 const appIconPath = node_path_1.default.join(electron_1.app.getAppPath(), "build", "icons", "icon.ico");
 const appIcon = electron_1.nativeImage.createFromPath(appIconPath);
 const publishRequest = (request) => windowRef?.webContents.send("bridge:request", request);
+const publishHttpLog = (log) => windowRef?.webContents.send("http:log", log);
 const bridgeStatus = () => status;
 const REQUEST_TIMEOUT_MS = 30000;
 const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
@@ -65,6 +66,8 @@ const failedRequest = (error) => ({
  */
 function sendHttpRequest(input) {
     return new Promise((resolve) => {
+        const startedAt = performance.now();
+        const requestHeaders = input.headers ?? {};
         let settled = false;
         let timer;
         let request;
@@ -74,8 +77,30 @@ function sendHttpRequest(input) {
             settled = true;
             if (timer)
                 clearTimeout(timer);
+            const durationMs = Math.round(performance.now() - startedAt);
+            publishHttpLog({
+                phase: result.ok ? "response" : "error",
+                method: input.method,
+                url: input.url,
+                requestHeaders,
+                requestBody: input.body ?? "",
+                status: result.status,
+                statusText: result.statusText,
+                responseHeaders: result.headers,
+                responseBody: result.body,
+                durationMs,
+                error: result.error,
+            });
             resolve(result);
         };
+        publishHttpLog({
+            phase: "request",
+            method: input.method,
+            url: input.url,
+            requestHeaders,
+            requestBody: input.body ?? "",
+            durationMs: 0,
+        });
         timer = setTimeout(() => {
             request?.abort();
             finish(failedRequest(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds`));

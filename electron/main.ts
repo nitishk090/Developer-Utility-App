@@ -12,6 +12,7 @@ import { HttpToolkitBridge } from "./services/httpToolkitBridge";
 import {
   BridgeStatus,
   HttpRequestInput,
+  HttpRequestLog,
   HttpResponseResult,
   LiveRequest,
 } from "./types";
@@ -28,6 +29,8 @@ const appIconPath = path.join(
 const appIcon = nativeImage.createFromPath(appIconPath);
 const publishRequest = (request: LiveRequest) =>
   windowRef?.webContents.send("bridge:request", request);
+const publishHttpLog = (log: HttpRequestLog) =>
+  windowRef?.webContents.send("http:log", log);
 const bridgeStatus = (): BridgeStatus => status;
 const REQUEST_TIMEOUT_MS = 30000;
 const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
@@ -48,6 +51,8 @@ const failedRequest = (error: string): HttpResponseResult => ({
  */
 function sendHttpRequest(input: HttpRequestInput): Promise<HttpResponseResult> {
   return new Promise((resolve) => {
+    const startedAt = performance.now();
+    const requestHeaders = input.headers ?? {};
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let request: Electron.ClientRequest | undefined;
@@ -55,8 +60,30 @@ function sendHttpRequest(input: HttpRequestInput): Promise<HttpResponseResult> {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      const durationMs = Math.round(performance.now() - startedAt);
+      publishHttpLog({
+        phase: result.ok ? "response" : "error",
+        method: input.method,
+        url: input.url,
+        requestHeaders,
+        requestBody: input.body ?? "",
+        status: result.status,
+        statusText: result.statusText,
+        responseHeaders: result.headers,
+        responseBody: result.body,
+        durationMs,
+        error: result.error,
+      });
       resolve(result);
     };
+    publishHttpLog({
+      phase: "request",
+      method: input.method,
+      url: input.url,
+      requestHeaders,
+      requestBody: input.body ?? "",
+      durationMs: 0,
+    });
     timer = setTimeout(() => {
       request?.abort();
       finish(

@@ -1,10 +1,21 @@
 export type Header = [string, string];
+export type RequestBodyType = "none" | "raw" | "json" | "form" | "multipart";
+export type RequestAuth = { type: "basic" | "bearer" | "custom"; value: string };
+export type RequestOption = "compressed" | "insecure" | "location";
 export interface ParsedRequest {
   method: string;
   url: string;
   headers: Header[];
   body: string;
   protocol?: string;
+  query?: Header[];
+  cookies?: Header[];
+  auth?: RequestAuth;
+  bodyType?: RequestBodyType;
+  formData?: Header[];
+  bodyEncoding?: "raw" | "urlencode";
+  options?: RequestOption[];
+  requestTarget?: string;
 }
 const methods = new Set([
   "GET",
@@ -28,16 +39,30 @@ export function generateCurl(request: ParsedRequest, multiline = true): string {
   if (!request.url) throw new Error("A URL is required");
   const parts = [`curl ${quote(request.url)}`];
   if (request.method !== "GET") parts.push(`-X ${request.method}`);
+  request.options?.forEach((option) => {
+    if (option === "compressed") parts.push("--compressed");
+    if (option === "insecure") parts.push("--insecure");
+    if (option === "location") parts.push("--location");
+  });
+  if (request.requestTarget) parts.push(`--request-target ${quote(request.requestTarget)}`);
+  if (request.auth?.type === "basic") parts.push(`--user ${quote(request.auth.value)}`);
   request.headers
     .filter(([key]) => !ignored.has(key.toLowerCase()))
+    .filter(([key]) => key.toLowerCase() !== "cookie")
+    .filter(([key]) => key.toLowerCase() !== "authorization" || request.auth?.type !== "basic")
     .forEach(([key, value]) =>
       parts.push(`--header ${quote(`${key}: ${value}`)}`),
     );
-  if (
-    request.body &&
-    ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"].includes(request.method)
-  )
-    parts.push(`--data-raw ${quote(request.body)}`);
+  if (request.cookies?.length)
+    parts.push(`--cookie ${quote(request.cookies.map(([key, value]) => `${key}=${value}`).join("; "))}`);
+  if (request.auth?.type === "bearer")
+    parts.push(`--header ${quote(`Authorization: Bearer ${request.auth.value}`)}`);
+  if (request.bodyType === "multipart")
+    request.formData?.forEach(([key, value]) => parts.push(`--form ${quote(`${key}=${value}`)}`));
+  else if (request.bodyType === "form")
+    request.formData?.forEach(([key, value]) => parts.push(`--data-urlencode ${quote(`${key}=${value}`)}`));
+  else if (request.body && ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"].includes(request.method))
+    parts.push(`${request.bodyEncoding === "urlencode" ? "--data-urlencode" : "--data-raw"} ${quote(request.body)}`);
   return parts.join(multiline ? " \\\n  " : " ");
 }
 /**
@@ -77,11 +102,18 @@ const valueFlags = new Set([
 ]);
 export function parseCurl(text: string): ParsedRequest {
   const tokens = tokenize(normalizeShellInput(text));
+  let getMode = false;
+  let bodyFlag: "raw" | "urlencode" | "form" | "multipart" = "raw";
   const request: ParsedRequest = {
     method: "GET",
     url: "",
     headers: [],
     body: "",
+    query: [],
+    cookies: [],
+    formData: [],
+    options: [],
+    bodyType: "none",
   };
   for (
     let i = tokens[0]?.match(/^curl(?:\.exe)?$/i) ? 1 : 0;
@@ -112,6 +144,10 @@ export function parseCurl(text: string): ParsedRequest {
     ) {
       const cookie = flagValue();
       // Only treat the value as a cookie string, not a cookie-jar file name.
+      cookie.split(/;\s*/).forEach((entry) => {
+        const separator = entry.indexOf("=");
+        if (separator > 0) request.cookies?.push([entry.slice(0, separator), entry.slice(separator + 1)]);
+      });
       if (cookie.includes("=")) request.headers.push(["Cookie", cookie]);
     } else if (
       ["-A", "--user-agent"].includes(item) ||
@@ -121,8 +157,21 @@ export function parseCurl(text: string): ParsedRequest {
     else if (["-e", "--referer"].includes(item) || item.startsWith("--referer="))
       request.headers.push(["Referer", flagValue()]);
     else if (["-u", "--user"].includes(item) || item.startsWith("--user=")) {
-      const encoded = encodeBasicAuth(flagValue());
-      if (encoded) request.headers.push(["Authorization", `Basic ${encoded}`]);
+        const credentials = flagValue();
+        request.auth = { type: "basic", value: credentials };
+        const encoded = encodeBasicAuth(credentials);
+        if (encoded) request.headers.push(["Authorization", `Basic ${encoded}`]);
+    } else if (item === "-G" || item === "--get") {
+      getMode = true;
+      request.method = "GET";
+    } else if (item === "-L" || item === "--location") {
+      request.options?.push("location");
+    } else if (item === "--compressed") {
+      request.options?.push("compressed");
+    } else if (item === "-k" || item === "--insecure") {
+      request.options?.push("insecure");
+    } else if (item === "--request-target" || item.startsWith("--request-target=")) {
+      request.requestTarget = flagValue();
     } else if (
       [
         "-d",
@@ -136,6 +185,17 @@ export function parseCurl(text: string): ParsedRequest {
     ) {
       const body = flagValue();
       request.body = request.body ? `${request.body}&${body}` : body;
+      bodyFlag = item.includes("urlencode") ? "urlencode" : "raw";
+      request.bodyEncoding = bodyFlag;
+    } else if (
+      ["-F", "--form"].includes(item) ||
+      item.startsWith("--form=")
+    ) {
+      const form = flagValue();
+      const separator = form.indexOf("=");
+      if (separator <= 0) throw new Error(`Invalid form field: ${form}`);
+      request.formData?.push([form.slice(0, separator), form.slice(separator + 1)]);
+      bodyFlag = "multipart";
     } else if (item === "--url" || item.startsWith("--url="))
       request.url = unwrap(flagValue());
     else if (valueFlags.has(item)) next();
@@ -144,7 +204,27 @@ export function parseCurl(text: string): ParsedRequest {
   }
   if (!request.url) throw new Error("No URL found");
   if (request.body && request.method === "GET") request.method = "POST";
+  if (getMode && request.body) {
+    request.body.split("&").forEach((pair) => {
+      const separator = pair.indexOf("=");
+      const key = separator < 0 ? pair : pair.slice(0, separator);
+      const value = separator < 0 ? "" : pair.slice(separator + 1);
+      request.query?.push([decodeURIComponent(key), decodeURIComponent(value)]);
+    });
+    request.url = appendQuery(request.url, request.query ?? []);
+    request.body = "";
+  }
+  if (request.formData?.length) request.bodyType = bodyFlag === "multipart" ? "multipart" : "form";
+  else if (request.body) request.bodyType = "raw";
+  const contentType = request.headers.find(([key]) => key.toLowerCase() === "content-type")?.[1] ?? "";
+  if (request.body && contentType.toLowerCase().includes("application/json")) request.bodyType = "json";
   return request;
+}
+
+function appendQuery(url: string, query: Header[]): string {
+  if (!query.length) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}${new URLSearchParams(query).toString()}`;
 }
 function tokenize(text: string): string[] {
   const output: string[] = [];

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { DeveloperUtilityApi, HttpRequestInput, LiveRequest } from "./types";
+import { DeveloperUtilityApi, HttpRequestInput, HttpRequestLog, LiveRequest } from "./types";
 const api: DeveloperUtilityApi = {
   clipboard: {
     copy: (text) => ipcRenderer.invoke("clipboard:copy", text),
@@ -30,6 +30,14 @@ const api: DeveloperUtilityApi = {
   http: {
     request: (input: HttpRequestInput) =>
       ipcRenderer.invoke("http:request", input),
+    onLog: (listener: (log: HttpRequestLog) => void) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        log: HttpRequestLog,
+      ) => listener(log);
+      ipcRenderer.on("http:log", handler);
+      return () => ipcRenderer.removeListener("http:log", handler);
+    },
   },
 };
 contextBridge.exposeInMainWorld("developerUtility", api);

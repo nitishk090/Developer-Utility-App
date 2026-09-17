@@ -41,6 +41,19 @@ export interface HttpResponseResult {
   body: string;
   error?: string;
 }
+export interface HttpRequestLog {
+  phase: "request" | "response" | "error";
+  method: string;
+  url: string;
+  requestHeaders: Record<string, string>;
+  requestBody: string;
+  status?: number;
+  statusText?: string;
+  responseHeaders?: string[];
+  responseBody?: string;
+  durationMs: number;
+  error?: string;
+}
 export interface DeveloperUtilityApi {
   clipboard: {
     copy(text: string): Promise<boolean>;
@@ -52,6 +65,7 @@ export interface DeveloperUtilityApi {
   };
   http?: {
     request(input: HttpRequestInput): Promise<HttpResponseResult>;
+    onLog(listener: (log: HttpRequestLog) => void): () => void;
   };
   runtime: {
     mode(): Promise<"normal" | "development">;

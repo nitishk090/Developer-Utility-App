@@ -26,6 +26,11 @@ const api = {
     },
     http: {
         request: (input) => electron_1.ipcRenderer.invoke("http:request", input),
+        onLog: (listener) => {
+            const handler = (_event, log) => listener(log);
+            electron_1.ipcRenderer.on("http:log", handler);
+            return () => electron_1.ipcRenderer.removeListener("http:log", handler);
+        },
     },
 };
 electron_1.contextBridge.exposeInMainWorld("developerUtility", api);

@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
@@ -26,14 +27,21 @@ import {
 } from "./utils/developerTools";
 import { JsonTree } from "./components/JsonTree";
 import type { Header, ParsedRequest } from "./utils/developerTools";
+import {
+  detectInputFormat,
+  parseAnyRequest,
+  requestToCurl,
+  validateRequest,
+  type InputFormat,
+} from "./utils/requestConverter";
 
-type Tool = { id: string; label: string; group: string };
+type Tool = { id: string; label: string; group: string; hiddenFromDefault?: boolean };
 const navigation: Tool[] = [
   { id: "home", label: "Workspace", group: "" },
   { id: "curl", label: "cURL Workspace", group: "API & Network" },
   { id: "curl-code", label: "cURL → Code", group: "API & Network" },
   { id: "api", label: "API Tester", group: "API & Network" },
-  { id: "aws-logs", label: "AWS Logs", group: "API & Network" },
+  { id: "aws-logs", label: "AWS Logs", group: "API & Network", hiddenFromDefault: true },
   { id: "request-analyzer", label: "Request Analyzer", group: "API & Network" },
   { id: "headers", label: "Headers Analyzer", group: "API & Network" },
   { id: "status", label: "HTTP Status Codes", group: "API & Network" },
@@ -60,6 +68,10 @@ const title = (id: string) =>
 function App() {
   const [active, setActive] = useState("home");
   const [collapsed, setCollapsed] = useState(false);
+  const [toolQuery, setToolQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [highlightedTool, setHighlightedTool] = useState(0);
+  const searchRef = useRef<HTMLDivElement>(null);
   const [dark, setDark] = useState(
     () => (localStorage.getItem("theme") ?? "dark") === "dark",
   );
@@ -69,6 +81,40 @@ function App() {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("theme", theme);
   }, [dark]);
+  useEffect(() => {
+    const closeSearch = (event: MouseEvent) => {
+      if (!searchRef.current?.contains(event.target as Node)) setSearchOpen(false);
+    };
+    document.addEventListener("mousedown", closeSearch);
+    return () => document.removeEventListener("mousedown", closeSearch);
+  }, []);
+  const searchResults = navigation.filter((item) =>
+    item.id !== "home" &&
+    `${item.label} ${item.group}`.toLowerCase().includes(toolQuery.trim().toLowerCase()),
+  );
+  const openSearchResult = (tool: Tool) => {
+    setActive(tool.id);
+    setToolQuery("");
+    setSearchOpen(false);
+    setHighlightedTool(0);
+  };
+  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      setSearchOpen(false);
+      return;
+    }
+    if (!searchResults.length) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightedTool((value) => (value + 1) % searchResults.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedTool((value) => (value - 1 + searchResults.length) % searchResults.length);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      openSearchResult(searchResults[highlightedTool] ?? searchResults[0]);
+    }
+  };
   return (
     <div
       className={`${dark ? "app dark" : "app"}${collapsed ? " sidebar-collapsed" : ""}`}
@@ -82,6 +128,7 @@ function App() {
           <section key={group}>
             {group && <h2>{group}</h2>}
             {navigation
+              .filter((item) => !item.hiddenFromDefault)
               .filter((item) => item.group === group)
               .map((item) => (
                 <button
@@ -106,6 +153,40 @@ function App() {
             ☰
           </button>
           <h1>{title(active)}</h1>
+          <div className="tool-search" ref={searchRef}>
+            <span className="tool-search-icon" aria-hidden="true">⌕</span>
+            <input
+              aria-label="Search tools"
+              aria-expanded={searchOpen}
+              placeholder="Search tools..."
+              value={toolQuery}
+              onFocus={() => setSearchOpen(true)}
+              onChange={(event) => {
+                setToolQuery(event.target.value);
+                setSearchOpen(true);
+                setHighlightedTool(0);
+              }}
+              onKeyDown={handleSearchKeyDown}
+            />
+            {searchOpen && toolQuery.trim() ? (
+              <div className="tool-search-results" role="listbox" aria-label="Tool search results">
+                {searchResults.length ? searchResults.map((tool, index) => (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    role="option"
+                    aria-selected={highlightedTool === index}
+                    className={highlightedTool === index ? "tool-search-result highlighted" : "tool-search-result"}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => openSearchResult(tool)}
+                  >
+                    <span>{tool.label}</span>
+                    <small>{tool.group}</small>
+                  </button>
+                )) : <div className="tool-search-empty">No tools found</div>}
+              </div>
+            ) : null}
+          </div>
           <button
             className="secondary"
             onClick={() => setDark((value) => !value)}
@@ -138,6 +219,7 @@ function Page({
   if (id === "json-paths") return <JsonPaths key={id} notify={notify} />;
   if (id === "json-types") return <JsonTypes key={id} notify={notify} />;
   if (id === "mock-json") return <MockJson key={id} notify={notify} />;
+  if (id === "curl") return <CurlWorkspace notify={notify} />;
   if (id === "postgres") return <PostgresHelper key={id} notify={notify} />;
   if (id === "curl-code") return <CurlCode key={id} notify={notify} />;
   if (id === "api") return <ApiTester key={id} notify={notify} />;
@@ -150,6 +232,107 @@ function Page({
     return <MobileHelper key={id} id={id} platform="iOS" notify={notify} />;
   if (id === "units") return <UnitsConverter key={id} notify={notify} />;
   return <ToolPage key={id} id={id} notify={notify} />;
+}
+
+function CurlWorkspace({ notify }: { notify: (message: string) => void }) {
+  const [input, setInput] = usePersistentState("curl-workspace:input", "");
+  const [output, setOutput] = usePersistentState("curl-workspace:output", "");
+  const [request, setRequest] = useState<ParsedRequest | null>(null);
+  const [format, setFormat] = useState<InputFormat>("unknown");
+  const [error, setError] = useState("");
+
+  const updateRequest = (next: ParsedRequest) => {
+    setRequest(next);
+    const errors = validateRequest(next);
+    if (errors.length) {
+      setError(errors.join(" "));
+      return;
+    }
+    try {
+      setOutput(requestToCurl(next));
+      setError("");
+    } catch (conversionError) {
+      setError((conversionError as Error).message);
+    }
+  };
+  const parse = () => {
+    try {
+      const result = parseAnyRequest(input);
+      setFormat(result.format);
+      updateRequest(result.request);
+      notify(`Parsed ${result.format.toUpperCase()} request`);
+    } catch (parseError) {
+      setRequest(null);
+      setFormat(detectInputFormat(input));
+      setError((parseError as Error).message);
+      notify("Unable to parse request");
+    }
+  };
+  const copy = async () => {
+    const ok = await window.developerUtility.clipboard.copy(output);
+    notify(ok ? "cURL copied to clipboard ✓" : "Clipboard unavailable");
+  };
+  const runRequest = async () => {
+    if (!request) return notify("Parse a request first");
+    const errors = validateRequest(request);
+    if (errors.length) return notify(errors[0]);
+    const result = await window.developerUtility.http?.request({
+      method: request.method,
+      url: request.url,
+      headers: Object.fromEntries(request.headers),
+      body: request.body || undefined,
+    });
+    notify(result?.ok ? `Received ${result.status}` : "Request failed");
+  };
+  const updateHeaders = (value: string) => {
+    if (!request) return;
+    updateRequest({ ...request, headers: parseHeaderText(value) });
+  };
+  const updateCookies = (value: string) => {
+    if (!request) return;
+    updateRequest({ ...request, cookies: parseHeaderText(value) });
+  };
+  return (
+    <div className="tool curl-workspace">
+      <div className="toolhead">
+        <span>Parse and convert request data to cURL</span>
+        <span className="spacer" />
+        <button className="primary" onClick={parse}>Parse request</button>
+        <button className="secondary" disabled={!output} onClick={() => void copy()}>Copy cURL</button>
+        <button className="secondary" disabled={!request} onClick={() => void runRequest()}>Run request</button>
+        <button className="secondary" onClick={() => { setInput(""); setOutput(""); setRequest(null); setError(""); setFormat("unknown"); notify("Cleared"); }}>Clear</button>
+      </div>
+      <Field label="Input / Request Data">
+        <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="Paste cURL, JSON, HAR, Fetch, Axios, or a raw HTTP request..." />
+      </Field>
+      {error ? <div className="curl-error">{error}</div> : null}
+      {request ? (
+        <>
+          <div className="curl-detected">Detected format: <strong>{format.toUpperCase()}</strong></div>
+          <div className="editorgrid curl-request-grid">
+            <Field label="Method"><select value={request.method} onChange={(event) => updateRequest({ ...request, method: event.target.value })}>{["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((method) => <option key={method}>{method}</option>)}</select></Field>
+            <Field label="URL"><input value={request.url} onChange={(event) => updateRequest({ ...request, url: event.target.value })} /></Field>
+            <Field label="Headers"><textarea value={formatPairs(request.headers)} onChange={(event) => updateHeaders(event.target.value)} /></Field>
+            <Field label="Cookies"><textarea value={formatPairs(request.cookies ?? [])} onChange={(event) => updateCookies(event.target.value)} placeholder="name=value" /></Field>
+            <Field label="Body type"><select value={request.bodyType ?? "none"} onChange={(event) => updateRequest({ ...request, bodyType: event.target.value as ParsedRequest["bodyType"] })}>{["none", "raw", "json", "form", "multipart"].map((type) => <option key={type}>{type}</option>)}</select></Field>
+            <Field label="Request body" span><textarea value={request.body} onChange={(event) => updateRequest({ ...request, body: event.target.value })} /></Field>
+          </div>
+          <Field label="Generated cURL"><textarea className="curl-output" value={output} readOnly /></Field>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function formatPairs(pairs: Header[] = []): string {
+  return pairs.map(([key, value]) => `${key}: ${value}`).join("\n");
+}
+
+function parseHeaderText(value: string): Header[] {
+  return value.split("\n").map((line) => {
+    const separator = line.indexOf(":");
+    return separator > 0 ? [line.slice(0, separator).trim(), line.slice(separator + 1).trim()] as Header : null;
+  }).filter((pair): pair is Header => pair !== null && pair[0].length > 0);
 }
 function Home({ open }: { open: (id: string) => void }) {
   return (
@@ -1557,20 +1740,34 @@ type AwsLogEntry = {
   id: string;
   timestamp: string;
   source: string;
+  logStream: string;
   message: string;
   detail: unknown;
 };
 
 type AwsLogPage = { entries: AwsLogEntry[]; nextToken: string | null };
 
-type AwsEnvironment = "BETA" | "STAGING" | "PRODUCTION" | "UAT";
-
-const AWS_ENVIRONMENT_HOSTS: Record<AwsEnvironment, string> = {
-  BETA: "planaventure-beta.granitestack.io",
-  STAGING: "planaventure-staging.granitestack.io",
-  PRODUCTION: "planaventure.granitestack.io",
-  UAT: "planaventure-uat.granitestack.io",
+type AwsLogTarget = {
+  id: string;
+  label: string;
+  baseUrl: string;
+  poolId: string;
+  projectPk: string;
+  period: string;
 };
+
+const AWS_LOG_TARGETS: AwsLogTarget[] = [
+  { id: "vendis", label: "Vendis", baseUrl: "https://shop.vendis.com.au", poolId: "gpool812642", projectPk: "1720", period: "1h" },
+  { id: "ryse", label: "Ryse", baseUrl: "https://ryse.today", poolId: "gpool281c99", projectPk: "1868", period: "1h" },
+  { id: "ryze", label: "Ryze", baseUrl: "https://ryze.granitestack.io", poolId: "gpool900acf", projectPk: "1885", period: "1m" },
+  { id: "hoozoo", label: "Hoozoo Beta", baseUrl: "https://beta.hoozoo.com", poolId: "gpool436869", projectPk: "1453", period: "1m" },
+  { id: "gpool8811cb", label: "GPool 8811CB", baseUrl: "https://gpool8811cb.granitestack.io", poolId: "gpool8811cb", projectPk: "1487", period: "1m" },
+  { id: "jobtracks", label: "JobTracks Beta", baseUrl: "https://jobtracks-beta.granitestack.io", poolId: "gpoola27509", projectPk: "1422", period: "1m" },
+  { id: "rochford", label: "Rochford Beta", baseUrl: "https://rochford-beta.granitestack.io", poolId: "gpoolc352e3", projectPk: "1608", period: "1m" },
+  { id: "indigo", label: "Indigo Finance", baseUrl: "https://hub.indigofinance.com.au", poolId: "gpool414599", projectPk: "759", period: "1m" },
+  { id: "planaventure", label: "Planaventure Beta", baseUrl: "https://planaventure-beta.granitestack.io", poolId: "gpool427713", projectPk: "1839", period: "1m" },
+];
+const AWS_LOG_PERIODS = ["5m", "10m", "15m", "30m", "1h", "12h", "1d", "7d", "30d"];
 
 function collectAwsLogs(payload: unknown): AwsLogPage {
   let nextToken: string | null = null;
@@ -1595,6 +1792,7 @@ function collectAwsLogs(payload: unknown): AwsLogPage {
         id: String(index),
         timestamp: "",
         source: "webapi_handler",
+        logStream: "",
         message: item,
         detail: item,
       };
@@ -1602,12 +1800,15 @@ function collectAwsLogs(payload: unknown): AwsLogPage {
     const record = item && typeof item === "object"
       ? item as Record<string, unknown>
       : {};
-    const message = record.message ?? record.msg ?? record.log ?? record.text ?? item;
-    const timestamp = record.timestamp ?? record.time ?? record.created_at ?? record.datetime ?? "";
+    const message = record.message ?? record.Message ?? record.msg ?? record.log ?? record.text ?? item;
+    const timestamp = record.timestamp ?? record.Timestamp ?? record.time ?? record.created_at ?? record.datetime ?? "";
+    const logStream = record.LogStreamName ?? record.logStreamName ?? record.log_stream_name ?? record.logStream ?? "";
+    const source = record.source ?? record.log_group ?? record.logger ?? (typeof logStream === "string" ? logStream.split("/")[0] : "") ?? "webapi_handler";
     return {
       id: String(record.id ?? record.eventId ?? index),
       timestamp: String(timestamp),
-      source: String(record.source ?? record.log_group ?? record.logger ?? "webapi_handler"),
+      source: String(source),
+      logStream: String(logStream),
       message: typeof message === "string" ? message : JSON.stringify(message),
       detail: item,
     };
@@ -1615,49 +1816,56 @@ function collectAwsLogs(payload: unknown): AwsLogPage {
   return { entries, nextToken };
 }
 
-function requestFromLogMessage(message: string): { method: string; url: string; body?: string } | null {
-  const match = message.match(/['"]method['"]\s*:\s*['"]([A-Z]+)['"][\s\S]*?['"]url['"]\s*:\s*['"](https?:\/\/[^'"]+)/i);
-  if (!match) return null;
-  const bodyMatch = message.match(/['"]data['"]\s*:\s*['"]((?:\\.|[^'"\\])*)['"]/i);
-  return {
-    method: match[1].toUpperCase(),
-    url: match[2].replaceAll("\\'", "'").replaceAll("\\\"", '"'),
-    body: bodyMatch?.[1],
-  };
+function requestFromLogValue(value: unknown): ParsedRequest | null {
+  if (!value) return null;
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  try {
+    return tools.parseRaw(text);
+  } catch {
+    return null;
+  }
 }
 
-function logRequest(entry: AwsLogEntry): { method: string; url: string; body?: string } | null {
+function logRequest(entry: AwsLogEntry): ParsedRequest | null {
   if (entry.detail && typeof entry.detail === "object") {
     const record = entry.detail as Record<string, unknown>;
-    if (typeof record.url === "string") {
-      return {
-        method: String(record.method ?? "GET").toUpperCase(),
-        url: record.url,
-        body: typeof record.body === "string" ? record.body : undefined,
-      };
+    for (const candidate of [
+      record,
+      record.request,
+      record.request_args,
+      record.requestArgs,
+    ]) {
+      const request = requestFromLogValue(candidate);
+      if (request) return request;
     }
   }
-  return requestFromLogMessage(entry.message);
+  return requestFromLogValue(entry.message);
 }
 
 function AwsLogs({ notify }: { notify: (message: string) => void }) {
-  const [poolId, setPoolId] = usePersistentState("aws-logs:pool", "gpool427713");
-  const [projectPk] = usePersistentState("aws-logs:project", "1839");
-  const [environment, setEnvironment] = usePersistentState<AwsEnvironment>("aws-logs:environment", "BETA");
-  const [group, setGroup] = usePersistentState("aws-logs:group", "webapi_handler");
+  const [targetId, setTargetId] = usePersistentState("aws-logs:target", "hoozoo");
+  const [baseUrl, setBaseUrl] = usePersistentState("aws-logs:base-url", "https://beta.hoozoo.com");
+  const [poolId, setPoolId] = usePersistentState("aws-logs:pool", "gpool436869");
+  const [projectPk, setProjectPk] = usePersistentState("aws-logs:project", "1453");
+  const [group, setGroup] = usePersistentState("aws-logs:group", "konect");
   const [token, setToken] = usePersistentState("aws-logs:token", "");
-  const [period, setPeriod] = usePersistentState("aws-logs:period", "1h");
+  const [period, setPeriod] = usePersistentState("aws-logs:period", "1m");
   const [pageSize, setPageSize] = usePersistentState("aws-logs:page-size", "100");
   const [filter, setFilter] = useState("");
   const [logs, setLogs] = useState<AwsLogEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready to fetch logs");
-  const [rawResponse, setRawResponse] = useState("");
   const [nextToken, setNextToken] = useState<string | null>(null);
   const [sources, setSources] = useState<string[]>(["source", "webapi_handler", "konect"]);
 
-  const target = AWS_ENVIRONMENT_HOSTS[environment];
+  useEffect(() => {
+    const unsubscribe = window.developerUtility.http?.onLog((log) => {
+      if (log.url.includes("/metrics/")) console.info("[AWS Logs request]", log);
+    });
+    return unsubscribe;
+  }, []);
+
   const endpoint = (pageToken?: string | null) => {
     const query = new URLSearchParams({
       pool_id: poolId,
@@ -1668,7 +1876,18 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
       timePeriod: period,
     });
     if (pageToken) query.set("next_token", pageToken);
-    return `https://${target}/metrics/?${query.toString()}`;
+    return `${baseUrl.trim().replace(/\/+$/, "")}/metrics/?${query.toString()}`;
+  };
+  const selectTarget = (id: string) => {
+    const target = AWS_LOG_TARGETS.find((item) => item.id === id);
+    if (!target) return;
+    setTargetId(target.id);
+    setBaseUrl(target.baseUrl);
+    setPoolId(target.poolId);
+    setProjectPk(target.projectPk);
+    setPeriod(target.period);
+    setLogs([]);
+    setNextToken(null);
   };
   const fetchLogs = async (pageToken?: string | null) => {
     setLoading(true);
@@ -1681,7 +1900,6 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
       });
       if (!result) throw new Error("HTTP bridge unavailable");
       if (!result.ok) throw new Error(result.error ?? `HTTP ${result.status}`);
-      setRawResponse(result.body);
       const parsed = JSON.parse(result.body) as unknown;
       const page = collectAwsLogs(parsed);
       const nextLogs = pageToken ? [...logs, ...page.entries] : page.entries;
@@ -1700,7 +1918,6 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
       notify(`Loaded ${page.entries.length} log events`);
     } catch (error) {
       setLogs([]);
-      setRawResponse(`Error: ${(error as Error).message}`);
       setStatus("Unable to load logs");
       notify("AWS Logs request failed");
     } finally {
@@ -1708,12 +1925,8 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
     }
   };
   const visibleLogs = logs.filter((entry) =>
-    `${entry.timestamp} ${entry.source} ${entry.message}`.toLowerCase().includes(filter.toLowerCase()),
+    `${entry.timestamp} ${entry.source} ${logRequest(entry)?.method ?? ""} ${entry.message}`.toLowerCase().includes(filter.toLowerCase()),
   );
-  const copy = async () => {
-    const ok = await window.developerUtility.clipboard.copy(rawResponse);
-    notify(ok ? "Raw response copied" : "Clipboard unavailable");
-  };
   const copyRecord = async (entry: AwsLogEntry, format: "raw" | "json" | "curl") => {
     const value = format === "raw"
       ? entry.message
@@ -1722,8 +1935,7 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
         : (() => {
             const request = logRequest(entry);
             if (!request) return "";
-            const body = request.body ? ` --data-raw ${JSON.stringify(request.body)}` : "";
-            return `curl --url ${JSON.stringify(request.url)} --request ${request.method}${body}`;
+            return tools.generateCurl(request);
           })();
     const ok = await window.developerUtility.clipboard.copy(value);
     notify(ok ? `Copied ${format} record` : "Clipboard unavailable");
@@ -1738,24 +1950,33 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
         <div className="awslogs-filter"><span>⌕</span><input aria-label="Filter logs" placeholder="Filter logs..." value={filter} onChange={(event) => setFilter(event.target.value)} /><span className="count">{visibleLogs.length} / {logs.length || pageSize}</span></div>
       </div>
       <div className="awslogs-controls">
-        <label>Target environment<div className="aws-segmented" role="group" aria-label="Target environment">{(Object.keys(AWS_ENVIRONMENT_HOSTS) as AwsEnvironment[]).map((item) => <button key={item} className={environment === item ? "selected" : ""} onClick={() => { setEnvironment(item); setLogs([]); setNextToken(null); }}>{item}</button>)}</div></label>
+        <label>Project target<select aria-label="Project target" value={targetId} onChange={(event) => selectTarget(event.target.value)}>{AWS_LOG_TARGETS.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}<option value="custom">Custom base URL</option></select></label>
         <label>Lambda target<select value={group} aria-label="Lambda target" onChange={(event) => setGroup(event.target.value)}>{sources.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>
-        <label className="awslogs-wide">Time range<div className="range-options">{["5m", "10m", "15m", "30m", "1h", "12h", "1d"].map((item) => <button key={item} className={period === item ? "selected" : ""} onClick={() => setPeriod(item)}>{item}</button>)}</div></label>
+        <label>Log period<select aria-label="Log period" value={period} onChange={(event) => setPeriod(event.target.value)}>{AWS_LOG_PERIODS.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
         <button className="awslogs-fetch" disabled={loading} onClick={() => void fetchLogs()}>{loading ? "Fetching..." : "Fetch logs"}</button>
       </div>
       <div className="awslogs-advanced">
+        <label className="awslogs-base-url">Base URL<input value={baseUrl} onChange={(event) => { setTargetId("custom"); setBaseUrl(event.target.value); setLogs([]); setNextToken(null); }} placeholder="https://example.com" /></label>
         <label>GPool ID<input value={poolId} onChange={(event) => { setPoolId(event.target.value); setLogs([]); setNextToken(null); }} placeholder="gpool..." /></label>
-        <span className="awslogs-target-summary">{environment} / {group}</span>
+        <label>Project PK<input value={projectPk} onChange={(event) => { setProjectPk(event.target.value); setLogs([]); setNextToken(null); }} placeholder="Project PK" /></label>
+        <span className="awslogs-target-summary">{baseUrl} / {group}</span>
         <label>Page size<select value={pageSize} onChange={(event) => setPageSize(event.target.value)}><option>25</option><option>50</option><option>100</option></select></label>
         <label className="token-field">Authorization<input type="password" placeholder="Bearer token (optional)" value={token} onChange={(event) => setToken(event.target.value)} /></label>
       </div>
-      <div className="awslogs-meta"><span>{status}</span><button onClick={() => void copy()} disabled={!rawResponse}>Copy raw response</button></div>
+      <div className="awslogs-meta"><span>{status}</span></div>
       <div className="awslogs-list">
         {visibleLogs.length ? visibleLogs.map((entry) => {
           const open = selected === entry.id;
+          const request = logRequest(entry);
           return <div className={open ? "awslog open" : "awslog"} key={`${entry.id}-${entry.timestamp}`} onClick={() => setSelected(open ? null : entry.id)}>
-            <time>{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : "--"}</time><span className="awslog-source">{entry.source}</span><code>{entry.message}</code><span className="chevron">{open ? "⌃" : "⌄"}</span>
-            {open ? <><pre>{typeof entry.detail === "string" ? entry.detail : JSON.stringify(entry.detail, null, 2)}</pre><div className="awslog-actions"><button onClick={(event) => { event.stopPropagation(); void copyRecord(entry, "raw"); }}>Copy raw</button><button onClick={(event) => { event.stopPropagation(); void copyRecord(entry, "json"); }}>Copy JSON</button>{hasCurl(entry) ? <button onClick={(event) => { event.stopPropagation(); void copyRecord(entry, "curl"); }}>Copy cURL</button> : null}</div></> : null}
+            <div className="awslog-meta-row"><time>{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : "--"}</time><span className="awslog-source">{entry.source}</span>{request ? <span className={`awslog-method awslog-method-${request.method.toLowerCase()}`}>{request.method}</span> : null}</div>
+            <code className="awslog-message">{entry.message}</code>
+            {open ? <div className="awslog-expanded" onClick={(event) => event.stopPropagation()}>
+              <div className="awslog-expanded-head"><span>Log stream: <strong>{entry.logStream || entry.source}</strong></span><button onClick={() => void copyRecord(entry, "raw")}>Copy raw</button></div>
+              <pre className="awslog-detail">{typeof entry.detail === "string" ? entry.detail : JSON.stringify(entry.detail, null, 2)}</pre>
+              <div className="awslog-actions"><button onClick={() => void copyRecord(entry, "json")}>Copy JSON</button>{hasCurl(entry) ? <button onClick={() => void copyRecord(entry, "curl")}>Copy cURL</button> : null}</div>
+            </div> : null}
+            <span className="awslog-chevron" aria-hidden="true">{open ? "⌃" : "⌄"}</span>
           </div>;
         }) : <div className="awslogs-empty"><span className="empty-icon">AWS</span><strong>{logs.length ? "No matching events" : "No log events loaded"}</strong><span>{logs.length ? "Try a different filter." : "Choose a time range and fetch the LogStream."}</span></div>}
       </div>
