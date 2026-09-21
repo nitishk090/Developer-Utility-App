@@ -13,7 +13,7 @@
     "test:watch": "vitest",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win nsis",
-    "dist:mac": "npm run build && electron-builder --mac dmg --x64 --arm64"
+    "dist:mac": "npm run build && electron-builder --mac --x64 --arm64"
   },
   "build": {
     "appId": "com.developerutility.app",
@@ -45,7 +45,8 @@
     "mac": {
       "icon": "assets/logo.png",
       "target": [
-        "dmg"
+        "dmg",
+        "pkg"
       ],
       "category": "public.app-category.developer-tools"
     }
