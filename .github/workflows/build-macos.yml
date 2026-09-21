@@ -36,6 +36,7 @@ jobs:
         run: |
           rm -rf release
           npx electron-builder --mac pkg --x64 --publish never
+          shopt -s nullglob
           pkg_files=(release/*.pkg)
           if [ "${#pkg_files[@]}" -ne 1 ]; then
             echo "Expected exactly one x64 PKG in release/, found ${#pkg_files[@]}"
@@ -49,6 +50,7 @@ jobs:
         run: |
           rm -rf release
           npx electron-builder --mac pkg --arm64 --publish never
+          shopt -s nullglob
           pkg_files=(release/*.pkg)
           if [ "${#pkg_files[@]}" -ne 1 ]; then
             echo "Expected exactly one arm64 PKG in release/, found ${#pkg_files[@]}"
@@ -62,6 +64,7 @@ jobs:
         run: |
           rm -rf release
           npx electron-builder --mac dmg --x64 --publish never
+          shopt -s nullglob
           dmg_files=(release/*.dmg)
           if [ "${#dmg_files[@]}" -ne 1 ]; then
             echo "Expected exactly one x64 DMG in release/, found ${#dmg_files[@]}"
@@ -75,6 +78,7 @@ jobs:
         run: |
           rm -rf release
           npx electron-builder --mac dmg --arm64 --publish never
+          shopt -s nullglob
           dmg_files=(release/*.dmg)
           if [ "${#dmg_files[@]}" -ne 1 ]; then
             echo "Expected exactly one arm64 DMG in release/, found ${#dmg_files[@]}"
@@ -87,6 +91,7 @@ jobs:
       - name: Verify macOS installers
         run: |
           ls -lah macos-artifacts
+          shopt -s nullglob
           installer_files=(macos-artifacts/*)
           if [ "${#installer_files[@]}" -ne 4 ]; then
             echo "Expected exactly four macOS installers, found ${#installer_files[@]}"
