@@ -27,15 +27,80 @@ jobs:
       - name: Build application
         run: npm run build
 
-      - name: Build macOS installers
-        run: npx electron-builder --mac dmg pkg --x64 --arm64
+      - name: Prepare macOS artifact staging
+        run: |
+          rm -rf release macos-artifacts
+          mkdir -p macos-artifacts
+
+      - name: Build x64 PKG
+        run: |
+          rm -rf release
+          npx electron-builder --mac pkg --x64 --publish never
+          pkg_files=(release/*.pkg)
+          if [ "${#pkg_files[@]}" -ne 1 ]; then
+            echo "Expected exactly one x64 PKG in release/, found ${#pkg_files[@]}"
+            exit 1
+          fi
+          pkg_file="${pkg_files[0]}"
+          cp "$pkg_file" "macos-artifacts/$(basename "${pkg_file%.pkg}")-x64.pkg"
+          rm -rf release
+
+      - name: Build arm64 PKG
+        run: |
+          rm -rf release
+          npx electron-builder --mac pkg --arm64 --publish never
+          pkg_files=(release/*.pkg)
+          if [ "${#pkg_files[@]}" -ne 1 ]; then
+            echo "Expected exactly one arm64 PKG in release/, found ${#pkg_files[@]}"
+            exit 1
+          fi
+          pkg_file="${pkg_files[0]}"
+          cp "$pkg_file" "macos-artifacts/$(basename "${pkg_file%.pkg}")-arm64.pkg"
+          rm -rf release
+
+      - name: Build x64 DMG
+        run: |
+          rm -rf release
+          npx electron-builder --mac dmg --x64 --publish never
+          dmg_files=(release/*.dmg)
+          if [ "${#dmg_files[@]}" -ne 1 ]; then
+            echo "Expected exactly one x64 DMG in release/, found ${#dmg_files[@]}"
+            exit 1
+          fi
+          dmg_file="${dmg_files[0]}"
+          cp "$dmg_file" "macos-artifacts/$(basename "${dmg_file%.dmg}")-x64.dmg"
+          rm -rf release
+
+      - name: Build arm64 DMG
+        run: |
+          rm -rf release
+          npx electron-builder --mac dmg --arm64 --publish never
+          dmg_files=(release/*.dmg)
+          if [ "${#dmg_files[@]}" -ne 1 ]; then
+            echo "Expected exactly one arm64 DMG in release/, found ${#dmg_files[@]}"
+            exit 1
+          fi
+          dmg_file="${dmg_files[0]}"
+          cp "$dmg_file" "macos-artifacts/$(basename "${dmg_file%.dmg}")-arm64.dmg"
+          rm -rf release
+
+      - name: Verify macOS installers
+        run: |
+          ls -lah macos-artifacts
+          installer_files=(macos-artifacts/*)
+          if [ "${#installer_files[@]}" -ne 4 ]; then
+            echo "Expected exactly four macOS installers, found ${#installer_files[@]}"
+            exit 1
+          fi
+          test "$(find macos-artifacts -maxdepth 1 -type f -name '*-x64.pkg' | wc -l | tr -d ' ')" -eq 1
+          test "$(find macos-artifacts -maxdepth 1 -type f -name '*-arm64.pkg' | wc -l | tr -d ' ')" -eq 1
+          test "$(find macos-artifacts -maxdepth 1 -type f -name '*-x64.dmg' | wc -l | tr -d ' ')" -eq 1
+          test "$(find macos-artifacts -maxdepth 1 -type f -name '*-arm64.dmg' | wc -l | tr -d ' ')" -eq 1
 
       - name: Upload macOS installers
         uses: actions/upload-artifact@v4
         with:
           name: macos-installers
-          path: |
-            release/*.dmg
-            release/*.pkg
+          path: macos-artifacts/
           if-no-files-found: error
           retention-days: 14
