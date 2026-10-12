@@ -38,7 +38,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const node_path_1 = __importDefault(require("node:path"));
+const node_perf_hooks_1 = require("node:perf_hooks");
 const httpToolkitBridge_1 = require("./services/httpToolkitBridge");
+const httpRequest_1 = require("./services/httpRequest");
 let windowRef;
 let bridge;
 let status = { state: "stopped" };
@@ -48,7 +50,6 @@ const publishRequest = (request) => windowRef?.webContents.send("bridge:request"
 const publishHttpLog = (log) => windowRef?.webContents.send("http:log", log);
 const bridgeStatus = () => status;
 const REQUEST_TIMEOUT_MS = 30000;
-const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
 const failedRequest = (error) => ({
     ok: false,
     status: 0,
@@ -57,6 +58,24 @@ const failedRequest = (error) => ({
     body: "",
     error,
 });
+function redactRequestUrl(rawUrl) {
+    try {
+        const url = new URL(rawUrl);
+        if (url.username)
+            url.username = "[REDACTED]";
+        if (url.password)
+            url.password = "[REDACTED]";
+        for (const key of url.searchParams.keys()) {
+            if (/(^key$|token|secret|password|authorization|signature)/i.test(key)) {
+                url.searchParams.set(key, "[REDACTED]");
+            }
+        }
+        return url.toString();
+    }
+    catch {
+        return rawUrl.split("?")[0];
+    }
+}
 /**
  * Performs an HTTP request from the main process via Electron's net module.
  * Unlike fetch() in the renderer, this network stack is not subject to CORS,
@@ -64,87 +83,59 @@ const failedRequest = (error) => ({
  * packaged (file://) app. It resolves with a structured result instead of
  * rejecting so the renderer can always render status information.
  */
-function sendHttpRequest(input) {
-    return new Promise((resolve) => {
-        const startedAt = performance.now();
-        const requestHeaders = input.headers ?? {};
-        let settled = false;
-        let timer;
-        let request;
-        const finish = (result) => {
-            if (settled)
-                return;
-            settled = true;
-            if (timer)
-                clearTimeout(timer);
-            const durationMs = Math.round(performance.now() - startedAt);
-            publishHttpLog({
-                phase: result.ok ? "response" : "error",
-                method: input.method,
-                url: input.url,
-                requestHeaders,
-                requestBody: input.body ?? "",
-                status: result.status,
-                statusText: result.statusText,
-                responseHeaders: result.headers,
-                responseBody: result.body,
-                durationMs,
-                error: result.error,
-            });
-            resolve(result);
-        };
-        publishHttpLog({
-            phase: "request",
-            method: input.method,
-            url: input.url,
-            requestHeaders,
-            requestBody: input.body ?? "",
-            durationMs: 0,
-        });
-        timer = setTimeout(() => {
-            request?.abort();
-            finish(failedRequest(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds`));
-        }, REQUEST_TIMEOUT_MS);
-        try {
-            request = electron_1.net.request({ method: input.method, url: input.url });
-        }
-        catch (error) {
-            finish(failedRequest(`Invalid request URL: ${error.message}`));
-            return;
-        }
-        request.on("error", (error) => finish(failedRequest(error.message)));
-        request.on("response", (response) => {
-            const chunks = [];
-            response.on("data", (chunk) => {
-                chunks.push(Buffer.from(chunk));
-            });
-            response.on("error", (error) => finish(failedRequest(error.message)));
-            response.on("end", () => {
-                const headers = Object.entries(response.headers).flatMap(([key, value]) => Array.isArray(value)
-                    ? value.map((entry) => `${key}: ${entry}`)
-                    : [`${key}: ${value}`]);
-                finish({
-                    ok: true,
-                    status: response.statusCode ?? 0,
-                    statusText: response.statusMessage ?? "",
-                    headers,
-                    body: Buffer.concat(chunks).toString("utf8"),
-                });
-            });
-        });
-        for (const [key, value] of Object.entries(input.headers ?? {})) {
-            try {
-                request.setHeader(key, value);
-            }
-            catch {
-                // Skip headers the network stack refuses to set.
-            }
-        }
-        if (input.body && !BODYLESS_METHODS.has(input.method.toUpperCase())) {
-            request.write(input.body, "utf8");
-        }
-        request.end();
+async function sendHttpRequest(input) {
+    const startedAt = node_perf_hooks_1.performance.now();
+    const requestHeaders = input.headers ?? {};
+    const method = input.method.toUpperCase();
+    const requestUrl = redactRequestUrl(input.url);
+    console.info(`[network] --> ${method} ${requestUrl}`);
+    publishHttpLog({
+        phase: "request",
+        method,
+        url: input.url,
+        requestHeaders,
+        requestBody: input.body ?? "",
+        durationMs: 0,
     });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let result;
+    try {
+        result = await (0, httpRequest_1.performHttpRequest)(input, controller.signal);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const cause = error instanceof Error && error.cause instanceof Error
+            ? `: ${error.cause.message}`
+            : "";
+        result = failedRequest(controller.signal.aborted
+            ? `Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds`
+            : `${message}${cause}`);
+    }
+    finally {
+        clearTimeout(timer);
+    }
+    const durationMs = Math.round(node_perf_hooks_1.performance.now() - startedAt);
+    if (result.error) {
+        console.error(`[network] !! ${method} ${requestUrl} (${durationMs} ms): ${result.error}`);
+    }
+    else {
+        console.info(`[network] <-- ${method} ${requestUrl} ${result.status} ${result.statusText} (${durationMs} ms)`);
+    }
+    publishHttpLog({
+        phase: result.ok ? "response" : "error",
+        method,
+        url: input.url,
+        requestHeaders,
+        requestBody: input.body ?? "",
+        status: result.status,
+        statusText: result.statusText,
+        responseHeaders: result.headers,
+        responseBody: result.body,
+        durationMs,
+        error: result.error,
+    });
+    return result;
 }
 function createWindow() {
     windowRef = new electron_1.BrowserWindow({

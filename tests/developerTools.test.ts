@@ -173,6 +173,46 @@ describe("request tooling", () => {
     expect(output).not.toContain("Content-Length");
     expect(output).not.toContain("Host:");
   });
+  it("parses newline-separated request labels and explicit plain-text bodies", () => {
+    const request = parseRaw([
+      "Method",
+      "POST",
+      "URL",
+      "https://example.com/messages",
+      "Headers:",
+      "Content-Type: text/plain",
+      "Body:",
+      "hello from a raw request",
+    ].join("\n"));
+    expect(request).toMatchObject({
+      method: "POST",
+      url: "https://example.com/messages",
+      headers: [["Content-Type", "text/plain"]],
+      body: "hello from a raw request",
+    });
+    expect(generateCurl(request)).toContain("--data-raw 'hello from a raw request'");
+
+    const separatedBody = parseRaw([
+      "Method: POST",
+      "URL: https://example.com/messages",
+      "Headers:",
+      "Content-Type: text/plain",
+      "",
+      "plain text without a body label",
+    ].join("\n"));
+    expect(separatedBody.body).toBe("plain text without a body label");
+  });
+  it("extracts JSON appended to an HTTP client header value", () => {
+    const request = parseRaw([
+      "Method: POST",
+      "URL: https://example.com/submit",
+      "Headers:",
+      "User-Agent:",
+      'okhttp/4.9.2{"message":"literal { brace }"}',
+    ].join("\n"));
+    expect(request.headers).toEqual([["User-Agent", "okhttp/4.9.2"]]);
+    expect(request.body).toBe('{"message":"literal { brace }"}');
+  });
   it("parses Python request log lines with args and headers dicts", () => {
     const body = JSON.stringify({
       data: { pk: 110, organisation_id: 27 },
@@ -275,15 +315,14 @@ describe("cURL generation", () => {
     );
     expect(generateCurl(request)).toContain("'\"'\"'");
   });
-  it("GET with query has no method or data", () => {
+  it("GET with query emits an explicit method without data", () => {
     const request = parseRaw(
       "GET https://example.com/users?page=1&limit=20 HTTP/1.1\nAccept: application/json\n",
     );
     const output = generateCurl(request);
     expect(
-      output.startsWith("curl 'https://example.com/users?page=1&limit=20'"),
+      output.startsWith("curl --location --request 'GET' 'https://example.com/users?page=1&limit=20'"),
     ).toBe(true);
-    expect(output).not.toContain("-X GET");
     expect(output).not.toContain("--data-raw");
   });
 });

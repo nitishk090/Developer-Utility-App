@@ -28,11 +28,9 @@ import {
 import { JsonTree } from "./components/JsonTree";
 import type { Header, ParsedRequest } from "./utils/developerTools";
 import {
-  detectInputFormat,
   parseAnyRequest,
   requestToCurl,
   validateRequest,
-  type InputFormat,
 } from "./utils/requestConverter";
 
 type Tool = { id: string; label: string; group: string; hiddenFromDefault?: boolean };
@@ -237,14 +235,12 @@ function Page({
 function CurlWorkspace({ notify }: { notify: (message: string) => void }) {
   const [input, setInput] = usePersistentState("curl-workspace:input", "");
   const [output, setOutput] = usePersistentState("curl-workspace:output", "");
-  const [request, setRequest] = useState<ParsedRequest | null>(null);
-  const [format, setFormat] = useState<InputFormat>("unknown");
   const [error, setError] = useState("");
 
   const updateRequest = (next: ParsedRequest) => {
-    setRequest(next);
     const errors = validateRequest(next);
     if (errors.length) {
+      setOutput("");
       setError(errors.join(" "));
       return;
     }
@@ -258,12 +254,10 @@ function CurlWorkspace({ notify }: { notify: (message: string) => void }) {
   const parse = () => {
     try {
       const result = parseAnyRequest(input);
-      setFormat(result.format);
       updateRequest(result.request);
       notify(`Parsed ${result.format.toUpperCase()} request`);
     } catch (parseError) {
-      setRequest(null);
-      setFormat(detectInputFormat(input));
+      setOutput("");
       setError((parseError as Error).message);
       notify("Unable to parse request");
     }
@@ -272,26 +266,6 @@ function CurlWorkspace({ notify }: { notify: (message: string) => void }) {
     const ok = await window.developerUtility.clipboard.copy(output);
     notify(ok ? "cURL copied to clipboard ✓" : "Clipboard unavailable");
   };
-  const runRequest = async () => {
-    if (!request) return notify("Parse a request first");
-    const errors = validateRequest(request);
-    if (errors.length) return notify(errors[0]);
-    const result = await window.developerUtility.http?.request({
-      method: request.method,
-      url: request.url,
-      headers: Object.fromEntries(request.headers),
-      body: request.body || undefined,
-    });
-    notify(result?.ok ? `Received ${result.status}` : "Request failed");
-  };
-  const updateHeaders = (value: string) => {
-    if (!request) return;
-    updateRequest({ ...request, headers: parseHeaderText(value) });
-  };
-  const updateCookies = (value: string) => {
-    if (!request) return;
-    updateRequest({ ...request, cookies: parseHeaderText(value) });
-  };
   return (
     <div className="tool curl-workspace">
       <div className="toolhead">
@@ -299,40 +273,15 @@ function CurlWorkspace({ notify }: { notify: (message: string) => void }) {
         <span className="spacer" />
         <button className="primary" onClick={parse}>Parse request</button>
         <button className="secondary" disabled={!output} onClick={() => void copy()}>Copy cURL</button>
-        <button className="secondary" disabled={!request} onClick={() => void runRequest()}>Run request</button>
-        <button className="secondary" onClick={() => { setInput(""); setOutput(""); setRequest(null); setError(""); setFormat("unknown"); notify("Cleared"); }}>Clear</button>
+        <button className="secondary" onClick={() => { setInput(""); setOutput(""); setError(""); notify("Cleared"); }}>Clear</button>
       </div>
       <Field label="Input / Request Data">
         <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="Paste cURL, JSON, HAR, Fetch, Axios, or a raw HTTP request..." />
       </Field>
       {error ? <div className="curl-error">{error}</div> : null}
-      {request ? (
-        <>
-          <div className="curl-detected">Detected format: <strong>{format.toUpperCase()}</strong></div>
-          <div className="editorgrid curl-request-grid">
-            <Field label="Method"><select value={request.method} onChange={(event) => updateRequest({ ...request, method: event.target.value })}>{["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((method) => <option key={method}>{method}</option>)}</select></Field>
-            <Field label="URL"><input value={request.url} onChange={(event) => updateRequest({ ...request, url: event.target.value })} /></Field>
-            <Field label="Headers"><textarea value={formatPairs(request.headers)} onChange={(event) => updateHeaders(event.target.value)} /></Field>
-            <Field label="Cookies"><textarea value={formatPairs(request.cookies ?? [])} onChange={(event) => updateCookies(event.target.value)} placeholder="name=value" /></Field>
-            <Field label="Body type"><select value={request.bodyType ?? "none"} onChange={(event) => updateRequest({ ...request, bodyType: event.target.value as ParsedRequest["bodyType"] })}>{["none", "raw", "json", "form", "multipart"].map((type) => <option key={type}>{type}</option>)}</select></Field>
-            <Field label="Request body" span><textarea value={request.body} onChange={(event) => updateRequest({ ...request, body: event.target.value })} /></Field>
-          </div>
-          <Field label="Generated cURL"><textarea className="curl-output" value={output} readOnly /></Field>
-        </>
-      ) : null}
+      {output ? <Field label="Generated cURL"><textarea className="curl-output" value={output} readOnly /></Field> : null}
     </div>
   );
-}
-
-function formatPairs(pairs: Header[] = []): string {
-  return pairs.map(([key, value]) => `${key}: ${value}`).join("\n");
-}
-
-function parseHeaderText(value: string): Header[] {
-  return value.split("\n").map((line) => {
-    const separator = line.indexOf(":");
-    return separator > 0 ? [line.slice(0, separator).trim(), line.slice(separator + 1).trim()] as Header : null;
-  }).filter((pair): pair is Header => pair !== null && pair[0].length > 0);
 }
 function Home({ open }: { open: (id: string) => void }) {
   return (
@@ -1508,7 +1457,7 @@ function ApiTester({ notify }: { notify: (message: string) => void }) {
           headers: requestHeaders,
           body: requestBody,
         });
-        if (!result.ok) {
+        if (!result.ok && result.status <= 0) {
           setStatus("Error");
           setResponse(`Error: ${result.error ?? "Request failed"}`);
           notify("Request failed");
@@ -1517,7 +1466,7 @@ function ApiTester({ notify }: { notify: (message: string) => void }) {
         setStatus(`HTTP ${result.status} ${result.statusText}`.trim());
         setResponseHeaders(result.headers.join("\n"));
         setResponse(result.body);
-        notify(`Received ${result.status}`);
+        notify(result.ok ? `Received ${result.status}` : `Received HTTP ${result.status}`);
         return;
       }
       const controller = new AbortController();
@@ -1552,10 +1501,11 @@ function ApiTester({ notify }: { notify: (message: string) => void }) {
     const ok = await window.developerUtility.clipboard.copy(content);
     notify(ok ? "Copied to clipboard ✓" : "Clipboard unavailable");
   };
-  const metaClass = status.startsWith("HTTP")
-    ? "respmeta ok"
-    : status === "Error"
-      ? "respmeta err"
+  const responseStatus = Number(status.match(/^HTTP\s+(\d{3})/)?.[1] ?? 0);
+  const metaClass = responseStatus >= 400 || status === "Error"
+    ? "respmeta err"
+    : responseStatus >= 200
+      ? "respmeta ok"
       : "respmeta";
   const changeBodyMode = (mode: "raw" | "json") => {
     if (mode === bodyMode) return;
@@ -1899,7 +1849,12 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
         headers: token.trim() ? { Authorization: token.trim() } : {},
       });
       if (!result) throw new Error("HTTP bridge unavailable");
-      if (!result.ok) throw new Error(result.error ?? `HTTP ${result.status}`);
+      if (!result.ok) {
+        const responseDetail = result.body.trim().slice(0, 300);
+        throw new Error(
+          result.error ?? `HTTP ${result.status}${responseDetail ? `: ${responseDetail}` : ""}`,
+        );
+      }
       const parsed = JSON.parse(result.body) as unknown;
       const page = collectAwsLogs(parsed);
       const nextLogs = pageToken ? [...logs, ...page.entries] : page.entries;
@@ -1918,8 +1873,8 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
       notify(`Loaded ${page.entries.length} log events`);
     } catch (error) {
       setLogs([]);
-      setStatus("Unable to load logs");
-      notify("AWS Logs request failed");
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`Unable to load logs: ${message}`);
     } finally {
       setLoading(false);
     }

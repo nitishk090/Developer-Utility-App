@@ -35,7 +35,7 @@ Run validation with `npm run typecheck`, `npm run lint`, `npm test`, and `npm ru
 
 ## Package
 
-Use `npm run dist:win` for a Windows NSIS installer. `npm run dist:mac` is configured for both Intel and Apple Silicon macOS builds; perform signing and notarization on macOS with an Apple Developer account.
+Use `npm run dist:win` for a Windows NSIS installer. Use `npm run dist:mac` for both DMG and PKG installers targeting Intel and Apple Silicon macOS; perform signing and notarization on macOS with an Apple Developer account.
 
 ## Project structure
 

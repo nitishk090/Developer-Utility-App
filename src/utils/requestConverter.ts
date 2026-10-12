@@ -17,13 +17,16 @@ const supportedMethods = new Set([
   "DELETE",
   "HEAD",
   "OPTIONS",
+  "TRACE",
+  "CONNECT",
 ]);
 
 export function detectInputFormat(input: string): InputFormat {
   const text = input.trim();
   if (!text) return "unknown";
   if (/^curl(?:\.exe)?\b/i.test(text)) return "curl";
-  if (/^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\S+\s+HTTP\/\d/i.test(text)) return "raw-http";
+  if (/^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE|CONNECT)\s+\S+\s+HTTP\/\d/i.test(text)) return "raw-http";
+  if (/^(?:method|url)\s*:?\s*(?:\r?\n|\S)/im.test(text)) return "raw-http";
   if (/\bfetch\s*\(/i.test(text)) return "fetch";
   if (/\b(?:axios|axios\.(?:get|post|put|patch|delete|request))\s*\(/i.test(text)) return "axios";
   try {
@@ -38,8 +41,16 @@ export function detectInputFormat(input: string): InputFormat {
 export function parseAnyRequest(input: string): { format: InputFormat; request: ParsedRequest } {
   const format = detectInputFormat(input);
   if (format === "curl") return { format, request: parseCurl(input) };
-  if (format === "raw-http") return { format, request: parseRaw(input) };
-  if (format === "json") return { format, request: parseJsonRequest(JSON.parse(input) as Record<string, unknown>) };
+  if (format === "raw-http" || format === "unknown")
+    return { format: "raw-http", request: parseRaw(input) };
+  if (format === "json") {
+    const value = JSON.parse(input) as Record<string, unknown>;
+    const logText = [value.Message, value.CleanMessage].find(
+      (item): item is string => typeof item === "string" && /request args/i.test(item),
+    );
+    if (logText) return { format, request: parseRaw(logText) };
+    return { format, request: parseJsonRequest(value) };
+  }
   if (format === "har") return { format, request: parseHar(JSON.parse(input) as Record<string, unknown>) };
   if (format === "fetch") return { format, request: parseFetch(input) };
   if (format === "axios") return { format, request: parseAxios(input) };

@@ -1393,14 +1393,6 @@ button:disabled {
 .curl-workspace > .field:first-of-type textarea {
   min-height: 150px;
 }
-.curl-detected {
-  margin: 12px 0 8px;
-  color: #6f7882;
-  font: 11px "Cascadia Mono", monospace;
-}
-.curl-detected strong {
-  color: #1683d8;
-}
 .curl-error {
   margin: 10px 0;
   padding: 9px 10px;
@@ -1409,15 +1401,6 @@ button:disabled {
   background: #d14b4b12;
   color: #d14b4b;
   font-size: 12px;
-}
-.curl-request-grid textarea,
-.curl-request-grid input,
-.curl-request-grid select {
-  min-height: 84px;
-}
-.curl-request-grid select,
-.curl-request-grid input {
-  min-height: 34px;
 }
 .curl-output {
   min-height: 150px;

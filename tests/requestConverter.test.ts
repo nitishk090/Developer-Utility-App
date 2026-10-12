@@ -30,6 +30,85 @@ describe("request format detection and normalization", () => {
       url: "https://example.com/users?page=2",
       bodyType: "json",
     });
+    const curl = requestToCurl(result.request);
+    expect(curl).toContain("curl --location --request 'POST' 'https://example.com/users?page=2'");
+    expect(curl).toContain(`--data-raw '{"name":"John","age":25}'`);
+  });
+
+  it("parses multiline cURL with a redundant Method header", () => {
+    const input = [
+      "curl --location --request POST https://example.com/api/v1/milestone_list/ \\",
+      "--header 'Method: POST' \\",
+      "--header 'accept: application/json, text/plain, */*' \\",
+      "--header 'authorization: Token placeholder-token' \\",
+      "--header 'Content-Type: application/json' \\",
+      `--data-raw '{"data":{"page_size":499,"page":1,"pk":2781,"user_pk":267}}'`,
+    ].join("\n");
+    const result = parseAnyRequest(input);
+
+    expect(result.request).toMatchObject({
+      method: "POST",
+      url: "https://example.com/api/v1/milestone_list/",
+      body: '{"data":{"page_size":499,"page":1,"pk":2781,"user_pk":267}}',
+    });
+    expect(result.request.headers).toEqual([
+      ["accept", "application/json, text/plain, */*"],
+      ["authorization", "Token placeholder-token"],
+      ["Content-Type", "application/json"],
+    ]);
+    expect(requestToCurl(result.request)).not.toContain("Method: POST");
+  });
+
+  it("parses labeled OkHttp request data and extracts compact JSON bodies", () => {
+    const input = [
+      "Method",
+      "POST",
+      "URL",
+      "https://example.com/submit",
+      "Headers",
+      "User-Agent:",
+      'okhttp/4.9.2{"message":"literal { brace }"}',
+    ].join("\n");
+    const result = parseAnyRequest(input);
+
+    expect(result.format).toBe("raw-http");
+    expect(result.request).toMatchObject({
+      method: "POST",
+      url: "https://example.com/submit",
+      headers: [["User-Agent", "okhttp/4.9.2"]],
+      body: '{"message":"literal { brace }"}',
+    });
+    expect(requestToCurl(result.request)).toContain(
+      `--data-raw '{"message":"literal { brace }"}'`,
+    );
+  });
+
+  it("accepts TRACE and CONNECT methods from raw HTTP requests", () => {
+    for (const method of ["TRACE", "CONNECT"]) {
+      const result = parseAnyRequest(`${method} https://example.com HTTP/1.1`);
+      expect(result.request.method).toBe(method);
+      expect(requestToCurl(result.request)).toContain(`--request '${method}'`);
+    }
+  });
+
+  it("extracts a request from a JSON-wrapped log record", () => {
+    const log = "request args {'method': 'POST', 'url': 'https://beta.example.com/api/v1/skill-list/', 'data': '{\"data\": {\"page\": 1}}'} : headers {'Content-type': 'application/json', 'Authorization': 'Bearer placeholder-token'}";
+    const result = parseAnyRequest(JSON.stringify({
+      Timestamp: "2026-10-06 09:12:51",
+      Message: log,
+      CleanMessage: log,
+      LogStreamName: "service/stream",
+    }));
+
+    expect(result.request).toMatchObject({
+      method: "POST",
+      url: "https://beta.example.com/api/v1/skill-list/",
+      body: '{"data": {"page": 1}}',
+    });
+    expect(result.request.headers).toEqual([
+      ["Content-type", "application/json"],
+      ["Authorization", "Bearer placeholder-token"],
+    ]);
     expect(requestToCurl(result.request)).toContain("--data-raw");
   });
 
@@ -72,7 +151,7 @@ describe("request format detection and normalization", () => {
 
   it("reports missing, invalid, and malformed request data", () => {
     expect(validateRequest({ method: "GET", url: "", headers: [], body: "" })).toContain("A request URL is required.");
-    expect(validateRequest({ method: "TRACE", url: "https://example.com", headers: [], body: "" })[0]).toContain("Unsupported HTTP method");
+    expect(validateRequest({ method: "CUSTOM", url: "https://example.com", headers: [], body: "" })[0]).toContain("Unsupported HTTP method");
     expect(validateRequest({ method: "POST", url: "https://example.com", headers: [], body: "{bad", bodyType: "json" })[0]).toContain("malformed");
   });
 });

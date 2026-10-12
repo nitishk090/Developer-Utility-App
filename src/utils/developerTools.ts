@@ -25,6 +25,8 @@ const methods = new Set([
   "DELETE",
   "HEAD",
   "OPTIONS",
+  "TRACE",
+  "CONNECT",
 ]);
 const ignored = new Set([
   "host",
@@ -37,12 +39,11 @@ export const quote = (value: string): string =>
   `'${value.replaceAll("'", "'\"'\"'")}'`;
 export function generateCurl(request: ParsedRequest, multiline = true): string {
   if (!request.url) throw new Error("A URL is required");
-  const parts = [`curl ${quote(request.url)}`];
-  if (request.method !== "GET") parts.push(`-X ${request.method}`);
+  const method = request.method.toUpperCase();
+  const parts = [`curl --location --request ${quote(method)} ${quote(request.url)}`];
   request.options?.forEach((option) => {
     if (option === "compressed") parts.push("--compressed");
     if (option === "insecure") parts.push("--insecure");
-    if (option === "location") parts.push("--location");
   });
   if (request.requestTarget) parts.push(`--request-target ${quote(request.requestTarget)}`);
   if (request.auth?.type === "basic") parts.push(`--user ${quote(request.auth.value)}`);
@@ -61,8 +62,15 @@ export function generateCurl(request: ParsedRequest, multiline = true): string {
     request.formData?.forEach(([key, value]) => parts.push(`--form ${quote(`${key}=${value}`)}`));
   else if (request.bodyType === "form")
     request.formData?.forEach(([key, value]) => parts.push(`--data-urlencode ${quote(`${key}=${value}`)}`));
-  else if (request.body && ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"].includes(request.method))
-    parts.push(`${request.bodyEncoding === "urlencode" ? "--data-urlencode" : "--data-raw"} ${quote(request.body)}`);
+  else if (request.body) {
+    let body = request.body;
+    try {
+      body = JSON.stringify(JSON.parse(body));
+    } catch {
+      // Keep non-JSON request bodies unchanged.
+    }
+    parts.push(`${request.bodyEncoding === "urlencode" ? "--data-urlencode" : "--data-raw"} ${quote(body)}`);
+  }
   return parts.join(multiline ? " \\\n  " : " ");
 }
 /**
@@ -136,8 +144,13 @@ export function parseCurl(text: string): ParsedRequest {
     ) {
       const header = flagValue();
       const [key, ...rest] = header.split(":");
-      if (key.trim())
-        request.headers.push([key.trim(), rest.join(":").trim()]);
+      const headerName = key.trim();
+      const headerValue = rest.join(":").trim();
+      const isMethodMarker =
+        headerName.toLowerCase() === "method" &&
+        headerValue.toUpperCase() === request.method;
+      if (headerName && !isMethodMarker)
+        request.headers.push([headerName, headerValue]);
     } else if (
       ["-b", "--cookie"].includes(item) ||
       item.startsWith("--cookie=")
@@ -551,7 +564,8 @@ export function parseRaw(text: string): ParsedRequest {
   if (pythonLog) return pythonLog;
   const pythonDict = tryParseAnyDict(text);
   if (pythonDict) return pythonDict;
-  const lines = text.replaceAll("\r\n", "\n").split("\n");
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
   const first = lines.findIndex((line) => line.trim().length > 0);
   const match = lines[first]?.match(
     /^\s*([A-Za-z]+)\s+(\S+)(?:\s+(HTTP\/\d(?:\.\d)?))?\s*$/,
@@ -587,52 +601,75 @@ export function parseRaw(text: string): ParsedRequest {
       protocol: match[3],
     };
   }
+
+  const valueAfterLabel = (label: string): { value: string; line: number } | null => {
+    const labelPattern = new RegExp(`^\\s*${label}\\s*:?\\s*(.*?)\\s*$`, "i");
+    for (let index = 0; index < lines.length; index += 1) {
+      const result = lines[index].match(labelPattern);
+      if (!result) continue;
+      if (result[1]) return { value: result[1], line: index };
+      for (let next = index + 1; next < lines.length; next += 1) {
+        if (lines[next].trim()) return { value: lines[next].trim(), line: next };
+      }
+      return { value: "", line: index };
+    }
+    return null;
+  };
+
   const method = (
-    text.match(/^Method\s*:\s*(\w+)/im)?.[1] ?? "GET"
+    valueAfterLabel("Method")?.value ??
+    normalized.match(/^\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE|CONNECT)\s+/im)?.[1] ??
+    "GET"
   ).toUpperCase();
   if (!methods.has(method))
     throw new Error("Unable to parse request. Include an HTTP method and URL.");
-  let url = "";
-  let urlIndex = -1;
-  for (let i = 0; i < lines.length && !url; i++) {
-    const line = lines[i].trim();
-    const inline = line.match(/^URL\s*:?\s*(.+)$/i);
-    if (inline) {
-      url = unwrap(inline[1].trim());
-      urlIndex = i;
-    } else if (/^URL\s*$/i.test(line)) {
-      const offset = lines.slice(i + 1).findIndex((item) => item.trim());
-      const nextIndex = offset >= 0 ? i + 1 + offset : -1;
-      const next = nextIndex >= 0 ? lines[nextIndex].trim() : "";
-      if (next && /^(https?:)?\/\//i.test(next)) {
-        url = unwrap(next);
-        urlIndex = nextIndex;
-      }
-    }
-  }
+  const labeledUrl = valueAfterLabel("URL");
+  const fallbackUrl = normalized.match(/https?:\/\/[^\s'"<>]+/i);
+  const url = unwrap(labeledUrl?.value ?? fallbackUrl?.[0] ?? "");
   if (!url) throw new Error("Unable to parse request. Include an HTTP method and URL.");
+
+  const jsonBody = findJsonBody(normalized);
+  const bodyLabelIndex = lines.findIndex((line) => /^\s*body\s*:/i.test(line));
+  const headersLabelIndex = lines.findIndex((line) => /^\s*headers\s*:?\s*$/i.test(line));
+  let bodyStart = jsonBody?.start ?? -1;
+  if (bodyLabelIndex >= 0) {
+    const labelLine = lines[bodyLabelIndex];
+    const colon = labelLine.indexOf(":");
+    const inlineBody = labelLine.slice(colon + 1).trimStart();
+    const lineStart = lines.slice(0, bodyLabelIndex).reduce((length, line) => length + line.length + 1, 0);
+    if (inlineBody) bodyStart = lineStart + labelLine.indexOf(inlineBody, colon + 1);
+    else {
+      const nextLine = lines.findIndex((line, index) => index > bodyLabelIndex && line.trim());
+      if (nextLine >= 0)
+        bodyStart = lines.slice(0, nextLine).reduce((length, line) => length + line.length + 1, 0);
+    }
+  } else if (bodyStart < 0 && headersLabelIndex >= 0) {
+    const separatorIndex = lines.findIndex((line, index) => index > headersLabelIndex && !line.trim());
+    const nextLine = lines.findIndex((line, index) => index > separatorIndex && line.trim());
+    if (separatorIndex >= 0 && nextLine >= 0)
+      bodyStart = lines.slice(0, nextLine).reduce((length, line) => length + line.length + 1, 0);
+  }
+
+  const headerText = bodyStart >= 0 ? normalized.slice(0, bodyStart) : normalized;
+  const headerLines = headerText.split("\n");
+  const headerStart = headersLabelIndex >= 0 ? headersLabelIndex + 1 : 0;
   const isLabel = (line: string) =>
-    /^(Method|URL|Headers)\s*:?\s*$/i.test(line) ||
-    /^(Method|URL|Headers)\s*:/i.test(line);
-  const bodyIndex = lines.findIndex((line) => /^[{[]/.test(line.trim()));
-  const split = lines.findIndex(
-    (line, index) => index > 0 && !line.trim(),
-  );
-  const headerEnd =
-    bodyIndex >= 0 ? bodyIndex : split >= 0 ? split : lines.length;
+    /^(Method|URL|Headers|Body)\s*:?\s*$/i.test(line) ||
+    /^(Method|URL|Headers|Body)\s*:/i.test(line);
   const headers: Header[] = [];
-  for (let i = 0; i < headerEnd; i++) {
-    const line = lines[i].trim();
-    if (!line || i === urlIndex || isLabel(line)) continue;
+  for (let i = headerStart; i < headerLines.length; i += 1) {
+    const line = headerLines[i].trim();
+    if (!line || isLabel(line) || line === url) continue;
     const colon = line.indexOf(":");
     if (colon <= 0) continue;
     const name = line.slice(0, colon).trim();
+    if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) continue;
     let value = line.slice(colon + 1).trim();
     if (!value) {
-      const next = lines[i + 1]?.trim() ?? "";
+      const next = headerLines[i + 1]?.trim() ?? "";
       const isNextHeader =
         !/^https?:\/\//i.test(next) &&
-        /^[A-Za-z][A-Za-z0-9._-]*\s*:/.test(next);
+        /^[A-Za-z0-9!#$%&'*+.^_`|~-]+\s*:/.test(next);
       if (next && !isLabel(next) && !/^[{[]/.test(next) && !isNextHeader) {
         value = next;
         i++;
@@ -640,12 +677,55 @@ export function parseRaw(text: string): ParsedRequest {
     }
     headers.push([name, value]);
   }
+
+  let body = "";
+  if (bodyStart >= 0) {
+    body = bodyLabelIndex >= 0
+      ? normalized.slice(bodyStart).trimEnd()
+      : jsonBody?.start === bodyStart
+        ? jsonBody.value
+        : normalized.slice(bodyStart).trimEnd();
+  }
   return {
     method,
     url,
     headers,
-    body: bodyIndex >= 0 ? lines.slice(bodyIndex).join("\n") : "",
+    body,
   };
+}
+
+function findJsonBody(text: string): { value: string; start: number } | null {
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== "{" && text[start] !== "[") continue;
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+    for (let end = start; end < text.length; end += 1) {
+      const char = text[end];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === "{" || char === "[") stack.push(char);
+      else if (char === "}" || char === "]") {
+        const opening = stack.pop();
+        if ((char === "}" && opening !== "{") || (char === "]" && opening !== "[")) break;
+        if (!stack.length) {
+          const value = text.slice(start, end + 1);
+          try {
+            JSON.parse(value);
+            return { value, start };
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+  return null;
 }
 export const formatJson = (value: string) =>
   JSON.stringify(JSON.parse(value), null, 2);
