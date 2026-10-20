@@ -53,11 +53,13 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "http-proxy": "^1.18.1",
     "react": "latest",
     "react-dom": "latest"
   },
   "devDependencies": {
     "@eslint/js": "latest",
+    "@types/http-proxy": "^1.17.17",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",

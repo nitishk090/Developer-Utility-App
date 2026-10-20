@@ -26,6 +26,7 @@ import {
   replacePlaceholders,
 } from "./utils/developerTools";
 import { JsonTree } from "./components/JsonTree";
+import { NetworkInspector } from "./components/NetworkInspector";
 import type { Header, ParsedRequest } from "./utils/developerTools";
 import {
   parseAnyRequest,
@@ -39,6 +40,7 @@ const navigation: Tool[] = [
   { id: "curl", label: "cURL Workspace", group: "API & Network" },
   { id: "curl-code", label: "cURL → Code", group: "API & Network" },
   { id: "api", label: "API Tester", group: "API & Network" },
+  { id: "network-inspector", label: "Mobile Network Inspector", group: "API & Network" },
   { id: "aws-logs", label: "AWS Logs", group: "API & Network", hiddenFromDefault: true },
   { id: "request-analyzer", label: "Request Analyzer", group: "API & Network" },
   { id: "headers", label: "Headers Analyzer", group: "API & Network" },
@@ -221,6 +223,8 @@ function Page({
   if (id === "postgres") return <PostgresHelper key={id} notify={notify} />;
   if (id === "curl-code") return <CurlCode key={id} notify={notify} />;
   if (id === "api") return <ApiTester key={id} notify={notify} />;
+  if (id === "network-inspector")
+    return <NetworkInspector key={id} notify={notify} />;
   if (id === "aws-logs") return <AwsLogs key={id} notify={notify} />;
   if (id === "request-analyzer")
     return <RequestAnalyzer key={id} notify={notify} />;

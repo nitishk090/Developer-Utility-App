@@ -54,6 +54,48 @@ export interface HttpRequestLog {
   durationMs: number;
   error?: string;
 }
+export interface NetworkCaptureEntry {
+  id: string;
+  timestamp: string;
+  method: string;
+  url: string;
+  hostname: string;
+  path: string;
+  queryParams: string;
+  protocol: "http" | "https-tunnel";
+  requestHeaders: Header[];
+  requestBody: string;
+  responseStatus?: number;
+  responseHeaders: Header[];
+  responseBody: string;
+  durationMs?: number;
+  requestSize: number;
+  responseSize: number;
+  contentType?: string;
+  error?: string;
+}
+export interface NetworkCaptureStatus {
+  state: "stopped" | "starting" | "listening" | "error";
+  host?: string;
+  bindAddress?: string;
+  port?: number;
+  endpoint?: string;
+  connectivityTest: "not-started" | "waiting" | "passed" | "failed";
+  connectivityTestAt?: string;
+  connectivityTestMessage?: string;
+  message?: string;
+}
+export interface NetworkInspectorApi {
+  start(port?: number, bindAddress?: string): Promise<NetworkCaptureStatus>;
+  configureLan(port: number, bindAddress: string): Promise<NetworkCaptureStatus>;
+  stop(): Promise<NetworkCaptureStatus>;
+  status(): Promise<NetworkCaptureStatus>;
+  lanAddresses(): Promise<string[]>;
+  beginConnectivityTest(): Promise<NetworkCaptureStatus>;
+  requests(): Promise<NetworkCaptureEntry[]>;
+  clear(): Promise<number>;
+  onRequest(listener: (request: NetworkCaptureEntry) => void): () => void;
+}
 export interface DeveloperUtilityApi {
   clipboard: {
     copy(text: string): Promise<boolean>;
@@ -77,4 +119,5 @@ export interface DeveloperUtilityApi {
     status(): Promise<BridgeStatus>;
     onRequest(listener: (request: LiveRequest) => void): () => void;
   };
+  networkInspector: NetworkInspectorApi;
 }

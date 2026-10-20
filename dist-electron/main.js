@@ -38,18 +38,30 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const node_path_1 = __importDefault(require("node:path"));
+const node_os_1 = require("node:os");
 const node_perf_hooks_1 = require("node:perf_hooks");
 const httpToolkitBridge_1 = require("./services/httpToolkitBridge");
 const httpRequest_1 = require("./services/httpRequest");
+const networkInspectorProxy_1 = require("./services/networkInspectorProxy");
 let windowRef;
 let bridge;
 let status = { state: "stopped" };
+let isQuitting = false;
+const networkInspector = new networkInspectorProxy_1.NetworkInspectorProxy((request) => windowRef?.webContents.send("network-inspector:request", request));
 const appIconPath = node_path_1.default.join(electron_1.app.getAppPath(), "build", "icons", "icon.ico");
 const appIcon = electron_1.nativeImage.createFromPath(appIconPath);
 const publishRequest = (request) => windowRef?.webContents.send("bridge:request", request);
 const publishHttpLog = (log) => windowRef?.webContents.send("http:log", log);
 const bridgeStatus = () => status;
 const REQUEST_TIMEOUT_MS = 30000;
+function getLanIpv4Addresses() {
+    return [...new Set(Object.values((0, node_os_1.networkInterfaces)())
+            .flatMap((addresses) => addresses ?? [])
+            .filter((address) => !address.internal &&
+            address.family === "IPv4" &&
+            !address.address.startsWith("169.254."))
+            .map((address) => address.address))];
+}
 const failedRequest = (error) => ({
     ok: false,
     status: 0,
@@ -211,9 +223,89 @@ electron_1.app.whenReady().then(() => {
     });
     electron_1.ipcMain.handle("bridge:status", bridgeStatus);
     electron_1.ipcMain.handle("http:request", (_event, input) => sendHttpRequest(input));
+    const assertTrustedRenderer = (event) => {
+        if (!windowRef ||
+            event.sender !== windowRef.webContents ||
+            event.senderFrame !== event.sender.mainFrame) {
+            throw new Error("Network Inspector IPC is only available to the application window");
+        }
+        const frameUrl = event.senderFrame.url;
+        const trustedFrame = electron_1.app.isPackaged
+            ? frameUrl.startsWith("file://")
+            : frameUrl.startsWith("http://localhost:5173/");
+        if (!trustedFrame)
+            throw new Error("Network Inspector IPC rejected an untrusted frame");
+    };
+    electron_1.ipcMain.handle("network-inspector:start", (event, port, bindAddress) => {
+        assertTrustedRenderer(event);
+        if (port !== undefined &&
+            (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535)) {
+            throw new Error("Proxy port must be an integer between 0 and 65535");
+        }
+        const host = bindAddress === undefined ? "127.0.0.1" : bindAddress;
+        if (!(0, networkInspectorProxy_1.isValidProxyBindAddress)(host, getLanIpv4Addresses())) {
+            throw new Error("Proxy bind address must be loopback or a current local LAN IPv4 address");
+        }
+        return networkInspector.start(port, host);
+    });
+    electron_1.ipcMain.handle("network-inspector:configure-lan", async (event, port, bindAddress) => {
+        assertTrustedRenderer(event);
+        if (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535 ||
+            !(0, networkInspectorProxy_1.isValidProxyBindAddress)(bindAddress, getLanIpv4Addresses()) ||
+            bindAddress === "127.0.0.1") {
+            throw new Error("Select a valid local LAN IPv4 address and proxy port");
+        }
+        const current = networkInspector.status();
+        const requiresRestart = current.state === "listening" &&
+            (current.bindAddress !== bindAddress ||
+                (port > 0 && current.port !== port));
+        if (!(current.state === "listening" && !requiresRestart)) {
+            const confirmation = await electron_1.dialog.showMessageBox(windowRef, {
+                type: "warning",
+                buttons: ["Expose proxy on LAN", "Cancel"],
+                defaultId: 1,
+                cancelId: 1,
+                title: "Expose HTTP proxy on your local network?",
+                message: "Switch the proxy listener to the selected LAN address?",
+                detail: "This stops the current listener and its active connections. Other devices on your local network may use this unauthenticated proxy while it is listening. Phone proxy settings are not changed automatically.",
+            });
+            if (confirmation.response !== 0)
+                return current;
+        }
+        if (requiresRestart) {
+            await networkInspector.stop();
+        }
+        return networkInspector.start(port, bindAddress);
+    });
+    electron_1.ipcMain.handle("network-inspector:stop", (event) => {
+        assertTrustedRenderer(event);
+        return networkInspector.stop();
+    });
+    electron_1.ipcMain.handle("network-inspector:status", (event) => {
+        assertTrustedRenderer(event);
+        return networkInspector.status();
+    });
+    electron_1.ipcMain.handle("network-inspector:lan-addresses", (event) => {
+        assertTrustedRenderer(event);
+        return getLanIpv4Addresses();
+    });
+    electron_1.ipcMain.handle("network-inspector:begin-connectivity-test", (event) => {
+        assertTrustedRenderer(event);
+        return networkInspector.beginConnectivityTest();
+    });
+    electron_1.ipcMain.handle("network-inspector:requests", (event) => {
+        assertTrustedRenderer(event);
+        return networkInspector.requests();
+    });
+    electron_1.ipcMain.handle("network-inspector:clear", (event) => {
+        assertTrustedRenderer(event);
+        return networkInspector.clear();
+    });
     createWindow();
 });
 electron_1.app.on("window-all-closed", () => {
+    windowRef = undefined;
+    void networkInspector.stop();
     if (process.platform !== "darwin")
         electron_1.app.quit();
 });
@@ -221,6 +313,16 @@ electron_1.app.on("activate", () => {
     if (electron_1.BrowserWindow.getAllWindows().length === 0)
         createWindow();
 });
-electron_1.app.on("before-quit", () => {
-    void bridge?.stop();
+electron_1.app.on("before-quit", (event) => {
+    if (isQuitting)
+        return;
+    event.preventDefault();
+    isQuitting = true;
+    void Promise.all([
+        bridge?.stop(),
+        networkInspector.stop(),
+    ]).then(() => electron_1.app.quit(), (error) => {
+        console.error(`Capture shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+        electron_1.app.quit();
+    });
 });
