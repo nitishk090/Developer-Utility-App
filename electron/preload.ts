@@ -1,5 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { DeveloperUtilityApi, HttpRequestInput, HttpRequestLog, LiveRequest } from "./types";
+import {
+  DeveloperUtilityApi,
+  HttpRequestInput,
+  HttpRequestLog,
+  LiveRequest,
+} from "./types";
 const api: DeveloperUtilityApi = {
   clipboard: {
     copy: (text) => ipcRenderer.invoke("clipboard:copy", text),
@@ -25,27 +30,6 @@ const api: DeveloperUtilityApi = {
       ) => listener(request);
       ipcRenderer.on("bridge:request", handler);
       return () => ipcRenderer.removeListener("bridge:request", handler);
-    },
-  },
-  networkInspector: {
-    start: (port, bindAddress) =>
-      ipcRenderer.invoke("network-inspector:start", port, bindAddress),
-    configureLan: (port, bindAddress) =>
-      ipcRenderer.invoke("network-inspector:configure-lan", port, bindAddress),
-    stop: () => ipcRenderer.invoke("network-inspector:stop"),
-    status: () => ipcRenderer.invoke("network-inspector:status"),
-    lanAddresses: () => ipcRenderer.invoke("network-inspector:lan-addresses"),
-    beginConnectivityTest: () =>
-      ipcRenderer.invoke("network-inspector:begin-connectivity-test"),
-    requests: () => ipcRenderer.invoke("network-inspector:requests"),
-    clear: () => ipcRenderer.invoke("network-inspector:clear"),
-    onRequest: (listener) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        request: Parameters<typeof listener>[0],
-      ) => listener(request);
-      ipcRenderer.on("network-inspector:request", handler);
-      return () => ipcRenderer.removeListener("network-inspector:request", handler);
     },
   },
   http: {

@@ -71,6 +71,37 @@ export interface LogStreamRecord {
   [key: string]: unknown;
 }
 
+export type LogTimestampTimeZone = "local" | "utc";
+
+export function formatLogTimestamp(
+  timestamp: string,
+  timeZone: LogTimestampTimeZone,
+): string {
+  const normalizedTimestamp = timestamp.trim();
+  if (!normalizedTimestamp) return "--";
+
+  const isNumericTimestamp = /^-?\d+(?:\.\d+)?$/.test(normalizedTimestamp);
+  const numericTimestamp = Number(normalizedTimestamp);
+  const hasExplicitTimeZone = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(normalizedTimestamp);
+  const timezoneFreeIsoTimestamp =
+    /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?)?$/.test(normalizedTimestamp);
+  const parsedTimestamp = isNumericTimestamp
+    ? new Date(Math.abs(numericTimestamp) < 1e12
+      ? numericTimestamp * 1000
+      : numericTimestamp)
+    : new Date(
+        timezoneFreeIsoTimestamp && !hasExplicitTimeZone
+          ? `${normalizedTimestamp.replace(" ", "T")}Z`
+          : normalizedTimestamp,
+      );
+  if (Number.isNaN(parsedTimestamp.getTime())) return timestamp;
+
+  return parsedTimestamp.toLocaleString(
+    undefined,
+    timeZone === "utc" ? { timeZone: "UTC" } : undefined,
+  );
+}
+
 export const DEFAULT_PROJECTS: LogStreamProject[] = [
   {
     id: "ryze-fund",

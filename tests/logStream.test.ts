@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildMetricsUrl, normalizeLogEntry } from "../src/utils/logStreamService";
+import {
+  buildMetricsUrl,
+  formatLogTimestamp,
+  normalizeLogEntry,
+} from "../src/utils/logStreamService";
 import {
   extractHttpRequestFromLog,
   type ParsedHttpRequest,
@@ -107,5 +111,40 @@ describe("log stream utilities", () => {
     const normalized = normalizeLogEntry(log);
     expect(normalized.category).toBe("REQUEST ARGS");
     expect(normalized.message).toContain("request args");
+  });
+
+  it("formats numeric Unix timestamps as seconds and milliseconds", () => {
+    const instant = new Date("2026-09-10T06:44:31.492Z");
+    const seconds = String(instant.getTime() / 1000);
+    const milliseconds = String(instant.getTime());
+
+    expect(formatLogTimestamp(seconds, "utc")).toBe(
+      instant.toLocaleString(undefined, { timeZone: "UTC" }),
+    );
+    expect(formatLogTimestamp(milliseconds, "utc")).toBe(
+      instant.toLocaleString(undefined, { timeZone: "UTC" }),
+    );
+  });
+
+  it("formats log timestamps in local time or UTC and preserves invalid values", () => {
+    const timestamp = "2026-09-10T06:44:31.492Z";
+    const instant = new Date(timestamp);
+
+    expect(formatLogTimestamp(timestamp, "local")).toBe(instant.toLocaleString());
+    expect(formatLogTimestamp(timestamp, "utc")).toBe(
+      instant.toLocaleString(undefined, { timeZone: "UTC" }),
+    );
+    expect(formatLogTimestamp("not-a-timestamp", "local")).toBe("not-a-timestamp");
+    expect(formatLogTimestamp("", "local")).toBe("--");
+  });
+
+  it("interprets timezone-free ISO log timestamps as UTC before local conversion", () => {
+    const timestamp = "2026-09-10 06:44:31.492";
+    const instant = new Date("2026-09-10T06:44:31.492Z");
+
+    expect(formatLogTimestamp(timestamp, "local")).toBe(instant.toLocaleString());
+    expect(formatLogTimestamp(timestamp, "utc")).toBe(
+      instant.toLocaleString(undefined, { timeZone: "UTC" }),
+    );
   });
 });

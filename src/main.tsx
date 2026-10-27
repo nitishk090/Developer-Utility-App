@@ -12,6 +12,10 @@ import "./styles.css";
 import { usePersistentState } from "./utils/toolState";
 import * as tools from "./utils/developerTools";
 import {
+  formatLogTimestamp,
+  type LogTimestampTimeZone,
+} from "./utils/logStreamService";
+import {
   analyzeHttp,
   convertUnit,
   curlToCode,
@@ -26,7 +30,6 @@ import {
   replacePlaceholders,
 } from "./utils/developerTools";
 import { JsonTree } from "./components/JsonTree";
-import { NetworkInspector } from "./components/NetworkInspector";
 import type { Header, ParsedRequest } from "./utils/developerTools";
 import {
   parseAnyRequest,
@@ -40,7 +43,6 @@ const navigation: Tool[] = [
   { id: "curl", label: "cURL Workspace", group: "API & Network" },
   { id: "curl-code", label: "cURL → Code", group: "API & Network" },
   { id: "api", label: "API Tester", group: "API & Network" },
-  { id: "network-inspector", label: "Mobile Network Inspector", group: "API & Network" },
   { id: "aws-logs", label: "AWS Logs", group: "API & Network", hiddenFromDefault: true },
   { id: "request-analyzer", label: "Request Analyzer", group: "API & Network" },
   { id: "headers", label: "Headers Analyzer", group: "API & Network" },
@@ -223,8 +225,6 @@ function Page({
   if (id === "postgres") return <PostgresHelper key={id} notify={notify} />;
   if (id === "curl-code") return <CurlCode key={id} notify={notify} />;
   if (id === "api") return <ApiTester key={id} notify={notify} />;
-  if (id === "network-inspector")
-    return <NetworkInspector key={id} notify={notify} />;
   if (id === "aws-logs") return <AwsLogs key={id} notify={notify} />;
   if (id === "request-analyzer")
     return <RequestAnalyzer key={id} notify={notify} />;
@@ -1721,7 +1721,7 @@ const AWS_LOG_TARGETS: AwsLogTarget[] = [
   { id: "indigo", label: "Indigo Finance", baseUrl: "https://hub.indigofinance.com.au", poolId: "gpool414599", projectPk: "759", period: "1m" },
   { id: "planaventure", label: "Planaventure Beta", baseUrl: "https://planaventure-beta.granitestack.io", poolId: "gpool427713", projectPk: "1839", period: "1m" },
 ];
-const AWS_LOG_PERIODS = ["5m", "10m", "15m", "30m", "1h", "12h", "1d", "7d", "30d"];
+const AWS_LOG_PERIODS = ["1m", "5m", "10m", "15m", "30m", "1h", "12h", "1d", "7d", "30d"];
 
 function collectAwsLogs(payload: unknown): AwsLogPage {
   let nextToken: string | null = null;
@@ -1805,6 +1805,10 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
   const [token, setToken] = usePersistentState("aws-logs:token", "");
   const [period, setPeriod] = usePersistentState("aws-logs:period", "1m");
   const [pageSize, setPageSize] = usePersistentState("aws-logs:page-size", "100");
+  const [timeZone, setTimeZone] = usePersistentState<LogTimestampTimeZone>(
+    "aws-logs:time-zone",
+    "local",
+  );
   const [filter, setFilter] = useState("");
   const [logs, setLogs] = useState<AwsLogEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -1912,6 +1916,7 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
         <label>Project target<select aria-label="Project target" value={targetId} onChange={(event) => selectTarget(event.target.value)}>{AWS_LOG_TARGETS.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}<option value="custom">Custom base URL</option></select></label>
         <label>Lambda target<select value={group} aria-label="Lambda target" onChange={(event) => setGroup(event.target.value)}>{sources.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>
         <label>Log period<select aria-label="Log period" value={period} onChange={(event) => setPeriod(event.target.value)}>{AWS_LOG_PERIODS.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+        <label>Display time<select aria-label="Log timestamp time zone" value={timeZone} onChange={(event) => setTimeZone(event.target.value as LogTimestampTimeZone)}><option value="local">Local time</option><option value="utc">UTC</option></select></label>
         <button className="awslogs-fetch" disabled={loading} onClick={() => void fetchLogs()}>{loading ? "Fetching..." : "Fetch logs"}</button>
       </div>
       <div className="awslogs-advanced">
@@ -1928,7 +1933,7 @@ function AwsLogs({ notify }: { notify: (message: string) => void }) {
           const open = selected === entry.id;
           const request = logRequest(entry);
           return <div className={open ? "awslog open" : "awslog"} key={`${entry.id}-${entry.timestamp}`} onClick={() => setSelected(open ? null : entry.id)}>
-            <div className="awslog-meta-row"><time>{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : "--"}</time><span className="awslog-source">{entry.source}</span>{request ? <span className={`awslog-method awslog-method-${request.method.toLowerCase()}`}>{request.method}</span> : null}</div>
+            <div className="awslog-meta-row"><time>{formatLogTimestamp(entry.timestamp, timeZone)}</time><span className="awslog-source">{entry.source}</span>{request ? <span className={`awslog-method awslog-method-${request.method.toLowerCase()}`}>{request.method}</span> : null}</div>
             <code className="awslog-message">{entry.message}</code>
             {open ? <div className="awslog-expanded" onClick={(event) => event.stopPropagation()}>
               <div className="awslog-expanded-head"><span>Log stream: <strong>{entry.logStream || entry.source}</strong></span><button onClick={() => void copyRecord(entry, "raw")}>Copy raw</button></div>
